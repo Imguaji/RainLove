@@ -5,6 +5,7 @@ import android.bluetooth.BluetoothGatt
 import android.bluetooth.BluetoothGattCallback
 import android.bluetooth.BluetoothGattCharacteristic
 import android.bluetooth.BluetoothGattDescriptor
+import android.bluetooth.BluetoothDevice
 import android.bluetooth.BluetoothProfile
 import android.bluetooth.le.BluetoothLeScanner
 import android.bluetooth.le.ScanCallback
@@ -46,7 +47,7 @@ class BleHeartRateSource(
         override fun onScanResult(callbackType: Int, result: ScanResult) {
             scanner.stopScan(this)
             listener?.onStatus("已发现 ${result.device.name ?: "心率设备"}，正在连接…")
-            gatt = result.device.connectGatt(context, false, gattCallback, BluetoothGatt.TRANSPORT_LE)
+            gatt = result.device.connectGatt(context, false, gattCallback, BluetoothDevice.TRANSPORT_LE)
         }
 
         override fun onScanFailed(errorCode: Int) {
