@@ -7,7 +7,9 @@ import android.app.PendingIntent
 import android.app.Service
 import android.bluetooth.BluetoothManager
 import android.content.Intent
+import android.os.Handler
 import android.os.IBinder
+import android.os.Looper
 import android.os.SystemClock
 import androidx.core.app.NotificationCompat
 import com.rainlove.app.media.MusicPlayer
@@ -26,6 +28,7 @@ class HeartRateForegroundService : Service(), HeartRateSource.Listener {
     private var triggerTarget = TriggerTarget.LOCAL_MUSIC
     private var bilibiliBvid = ""
     private var bilibiliAutoPlay = true
+    private val mainHandler = Handler(Looper.getMainLooper())
 
     override fun onCreate() {
         super.onCreate()
@@ -89,6 +92,10 @@ class HeartRateForegroundService : Service(), HeartRateSource.Listener {
     }
 
     override fun onHeartRate(bpm: Int) {
+        if (Looper.myLooper() != Looper.getMainLooper()) {
+            mainHandler.post { onHeartRate(bpm) }
+            return
+        }
         if (!isRunning) return
         when (engine.onHeartRate(bpm, SystemClock.elapsedRealtime())) {
             HeartRateTriggerEngine.Event.StartPlayback -> {
@@ -110,6 +117,10 @@ class HeartRateForegroundService : Service(), HeartRateSource.Listener {
     }
 
     override fun onStatus(message: String) {
+        if (Looper.myLooper() != Looper.getMainLooper()) {
+            mainHandler.post { onStatus(message) }
+            return
+        }
         if (!isRunning) return
         currentStatus = message
         getSystemService(NotificationManager::class.java).notify(NOTIFICATION_ID, buildNotification(message))
@@ -117,6 +128,10 @@ class HeartRateForegroundService : Service(), HeartRateSource.Listener {
     }
 
     override fun onError(message: String) {
+        if (Looper.myLooper() != Looper.getMainLooper()) {
+            mainHandler.post { onError(message) }
+            return
+        }
         if (isRunning) stopMonitoring(message)
     }
 
@@ -131,6 +146,10 @@ class HeartRateForegroundService : Service(), HeartRateSource.Listener {
     }
 
     private fun rememberConnectedDevice(device: BleHeartRateDevice) {
+        if (Looper.myLooper() != Looper.getMainLooper()) {
+            mainHandler.post { rememberConnectedDevice(device) }
+            return
+        }
         getSharedPreferences(RainLovePreferences.NAME, MODE_PRIVATE).edit()
             .putString(RainLovePreferences.DEVICE_ADDRESS, device.address)
             .putString(RainLovePreferences.DEVICE_NAME, device.name)
@@ -153,6 +172,7 @@ class HeartRateForegroundService : Service(), HeartRateSource.Listener {
 
     override fun onDestroy() {
         isRunning = false
+        mainHandler.removeCallbacksAndMessages(null)
         val source = heartRateSource
         heartRateSource = null
         source?.stop()
