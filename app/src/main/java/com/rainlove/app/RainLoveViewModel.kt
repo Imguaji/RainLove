@@ -7,6 +7,8 @@ import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
 import android.net.Uri
+import android.os.Handler
+import android.os.Looper
 import android.os.SystemClock
 import android.provider.OpenableColumns
 import androidx.core.content.ContextCompat
@@ -31,6 +33,7 @@ data class RainLoveUiState(
     val recoverySeconds: Int = 10,
     val cooldownSeconds: Int = 60,
     val musicName: String = "尚未选择音乐",
+    val musicPlaying: Boolean = false,
     val triggerTarget: TriggerTarget = TriggerTarget.LOCAL_MUSIC,
     val bilibiliBvid: String = "",
     val demoMode: Boolean = true,
@@ -44,12 +47,20 @@ data class RainLoveUiState(
 
 class RainLoveViewModel(application: Application) : AndroidViewModel(application) {
     private val preferences = application.getSharedPreferences(RainLovePreferences.NAME, Context.MODE_PRIVATE)
-    private val musicPlayer = MusicPlayer(application)
     private val bluetoothManager = application.getSystemService(BluetoothManager::class.java)
     private val _ui = MutableStateFlow(loadState())
     val ui = _ui.asStateFlow()
+    private val musicPlayer = MusicPlayer(application, ::onMusicEvent)
     private var engine = HeartRateTriggerEngine(_ui.value.toTriggerConfig())
     private var deviceScanner: BleHeartRateScanner? = null
+    private val demoHandler = Handler(Looper.getMainLooper())
+    private val demoTick = object : Runnable {
+        override fun run() {
+            if (!_ui.value.monitoring || !_ui.value.demoMode) return
+            handleDemoHeartRate(_ui.value.bpm)
+            demoHandler.postDelayed(this, DEMO_TICK_MS)
+        }
+    }
 
     private val serviceStateReceiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context?, intent: Intent?) {
@@ -108,6 +119,8 @@ class RainLoveViewModel(application: Application) : AndroidViewModel(application
 
     private fun start() {
         stopDeviceScan()
+        musicPlayer.pause()
+        _ui.value = _ui.value.copy(musicPlaying = false)
         if (_ui.value.triggerTarget == TriggerTarget.BILIBILI_VIDEO &&
             BilibiliVideo.normalizeBvid(_ui.value.bilibiliBvid) == null
         ) {
@@ -117,6 +130,7 @@ class RainLoveViewModel(application: Application) : AndroidViewModel(application
         rebuildEngine()
         if (_ui.value.demoMode) {
             _ui.value = _ui.value.copy(monitoring = true, status = "Demo 模式运行中")
+            startDemoTicker()
         } else {
             _ui.value = _ui.value.copy(monitoring = true, status = "正在启动后台监测…")
             ContextCompat.startForegroundService(
@@ -128,6 +142,7 @@ class RainLoveViewModel(application: Application) : AndroidViewModel(application
     }
 
     private fun stop() {
+        stopDemoTicker()
         if (_ui.value.demoMode) {
             musicPlayer.pause()
             engine.reset(SystemClock.elapsedRealtime())
@@ -255,8 +270,24 @@ class RainLoveViewModel(application: Application) : AndroidViewModel(application
             .apply()
     }
 
+    fun toggleMusicPreview() {
+        if (_ui.value.monitoring) return
+        if (musicPlayer.isPlaying()) {
+            musicPlayer.pause()
+            _ui.value = _ui.value.copy(status = "已停止测试播放")
+        } else {
+            val status = if (musicPlayer.play()) {
+                "正在启动测试播放…"
+            } else {
+                "请先选择本地音乐"
+            }
+            _ui.value = _ui.value.copy(status = status)
+        }
+    }
+
     fun setTriggerTarget(target: TriggerTarget) {
         if (_ui.value.monitoring) return
+        if (target != TriggerTarget.LOCAL_MUSIC) musicPlayer.pause()
         _ui.value = _ui.value.copy(triggerTarget = target)
         preferences.edit().putString(RainLovePreferences.TRIGGER_TARGET, target.name).apply()
     }
@@ -283,7 +314,7 @@ class RainLoveViewModel(application: Application) : AndroidViewModel(application
             HeartRateTriggerEngine.Event.StartPlayback -> {
                 val status = when (_ui.value.triggerTarget) {
                     TriggerTarget.LOCAL_MUSIC -> {
-                        if (musicPlayer.play()) "达到触发条件，正在播放" else "已触发，但尚未选择音乐"
+                        if (musicPlayer.play()) "达到触发条件，正在启动音乐…" else "已触发，但尚未选择音乐"
                     }
                     TriggerTarget.BILIBILI_VIDEO -> {
                         if (BilibiliVideo.open(getApplication(), _ui.value.bilibiliBvid)) {
@@ -306,6 +337,20 @@ class RainLoveViewModel(application: Application) : AndroidViewModel(application
 
     private fun rebuildEngine() {
         engine = HeartRateTriggerEngine(_ui.value.toTriggerConfig())
+    }
+
+    private fun onMusicEvent(event: MusicPlayer.Event) {
+        _ui.value = when (event) {
+            MusicPlayer.Event.Started -> _ui.value.copy(
+                musicPlaying = true,
+                status = "本地音乐已开始播放",
+            )
+            MusicPlayer.Event.Stopped -> _ui.value.copy(musicPlaying = false)
+            is MusicPlayer.Event.Error -> _ui.value.copy(
+                musicPlaying = false,
+                status = "音乐播放失败：${event.detail}，请重新选择文件",
+            )
+        }
     }
 
     private fun loadState(): RainLoveUiState {
@@ -339,6 +384,7 @@ class RainLoveViewModel(application: Application) : AndroidViewModel(application
     }
 
     override fun onCleared() {
+        stopDemoTicker()
         deviceScanner?.stop()
         getApplication<Application>().unregisterReceiver(serviceStateReceiver)
         musicPlayer.release()
@@ -350,6 +396,15 @@ class RainLoveViewModel(application: Application) : AndroidViewModel(application
         _ui.value = _ui.value.copy(scanningDevices = false)
     }
 
+    private fun startDemoTicker() {
+        demoHandler.removeCallbacks(demoTick)
+        demoHandler.post(demoTick)
+    }
+
+    private fun stopDemoTicker() {
+        demoHandler.removeCallbacks(demoTick)
+    }
+
     private fun RainLoveUiState.toTriggerConfig() = TriggerConfig(
         triggerBpm = triggerBpm,
         triggerDurationMs = triggerSeconds * 1_000L,
@@ -357,4 +412,8 @@ class RainLoveViewModel(application: Application) : AndroidViewModel(application
         recoveryDurationMs = recoverySeconds * 1_000L,
         cooldownMs = cooldownSeconds * 1_000L,
     )
+
+    private companion object {
+        const val DEMO_TICK_MS = 250L
+    }
 }

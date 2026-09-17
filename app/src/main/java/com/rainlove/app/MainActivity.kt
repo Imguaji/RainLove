@@ -141,6 +141,10 @@ private fun RainLoveScreen(vm: RainLoveViewModel) {
                     onClick = { musicLauncher.launch(arrayOf("audio/*")) },
                     enabled = !state.monitoring,
                 ) { Text("选择本地音乐") }
+                Button(
+                    onClick = vm::toggleMusicPreview,
+                    enabled = !state.monitoring && state.musicName != "尚未选择音乐",
+                ) { Text(if (state.musicPlaying) "停止测试播放" else "测试播放本地音乐") }
             } else {
                 OutlinedTextField(
                     value = state.bilibiliBvid,

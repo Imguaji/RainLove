@@ -28,7 +28,7 @@ class HeartRateForegroundService : Service(), HeartRateSource.Listener {
 
     override fun onCreate() {
         super.onCreate()
-        musicPlayer = MusicPlayer(this)
+        musicPlayer = MusicPlayer(this, ::onMusicEvent)
         createNotificationChannel()
     }
 
@@ -92,7 +92,7 @@ class HeartRateForegroundService : Service(), HeartRateSource.Listener {
             HeartRateTriggerEngine.Event.StartPlayback -> {
                 when (triggerTarget) {
                     TriggerTarget.LOCAL_MUSIC -> {
-                        if (musicPlayer.play()) onStatus("达到触发条件，正在播放")
+                        if (musicPlayer.play()) onStatus("达到触发条件，正在启动音乐…")
                         else onStatus("已触发，但尚未选择音乐")
                     }
                     TriggerTarget.BILIBILI_VIDEO -> notifyBilibiliTrigger()
@@ -116,6 +116,16 @@ class HeartRateForegroundService : Service(), HeartRateSource.Listener {
 
     override fun onError(message: String) {
         if (isRunning) stopMonitoring(message)
+    }
+
+    private fun onMusicEvent(event: MusicPlayer.Event) {
+        when (event) {
+            MusicPlayer.Event.Started -> onStatus("本地音乐已开始播放")
+            MusicPlayer.Event.Stopped -> Unit
+            is MusicPlayer.Event.Error -> onStatus(
+                "音乐播放失败：${event.detail}，请重新选择文件"
+            )
+        }
     }
 
     private fun rememberConnectedDevice(device: BleHeartRateDevice) {
