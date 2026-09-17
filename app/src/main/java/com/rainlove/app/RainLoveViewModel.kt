@@ -36,6 +36,7 @@ data class RainLoveUiState(
     val musicPlaying: Boolean = false,
     val triggerTarget: TriggerTarget = TriggerTarget.LOCAL_MUSIC,
     val bilibiliBvid: String = "",
+    val bilibiliAutoPlay: Boolean = true,
     val demoMode: Boolean = true,
     val monitoring: Boolean = false,
     val scanningDevices: Boolean = false,
@@ -298,12 +299,18 @@ class RainLoveViewModel(application: Application) : AndroidViewModel(application
         preferences.edit().putString(RainLovePreferences.BILIBILI_BVID, value).apply()
     }
 
+    fun setBilibiliAutoPlay(enabled: Boolean) {
+        if (_ui.value.monitoring) return
+        _ui.value = _ui.value.copy(bilibiliAutoPlay = enabled)
+        preferences.edit().putBoolean(RainLovePreferences.BILIBILI_AUTO_PLAY, enabled).apply()
+    }
+
     fun testBilibiliVideo() {
         val bvid = BilibiliVideo.normalizeBvid(_ui.value.bilibiliBvid)
         _ui.value = _ui.value.copy(
             status = when {
                 bvid == null -> "请输入有效的 BV 号"
-                BilibiliVideo.open(getApplication(), bvid) -> "已打开 $bvid"
+                BilibiliVideo.open(getApplication(), bvid, _ui.value.bilibiliAutoPlay) -> "已打开 $bvid"
                 else -> "无法打开视频链接"
             }
         )
@@ -317,7 +324,12 @@ class RainLoveViewModel(application: Application) : AndroidViewModel(application
                         if (musicPlayer.play()) "达到触发条件，正在启动音乐…" else "已触发，但尚未选择音乐"
                     }
                     TriggerTarget.BILIBILI_VIDEO -> {
-                        if (BilibiliVideo.open(getApplication(), _ui.value.bilibiliBvid)) {
+                        if (BilibiliVideo.open(
+                                getApplication(),
+                                _ui.value.bilibiliBvid,
+                                _ui.value.bilibiliAutoPlay,
+                            )
+                        ) {
                             "达到触发条件，已打开 B 站视频"
                         } else {
                             "已触发，但无法打开 B 站视频"
@@ -366,6 +378,7 @@ class RainLoveViewModel(application: Application) : AndroidViewModel(application
                 ?.let { runCatching { TriggerTarget.valueOf(it) }.getOrNull() }
                 ?: TriggerTarget.LOCAL_MUSIC,
             bilibiliBvid = preferences.getString(RainLovePreferences.BILIBILI_BVID, "") ?: "",
+            bilibiliAutoPlay = preferences.getBoolean(RainLovePreferences.BILIBILI_AUTO_PLAY, true),
             demoMode = preferences.getBoolean(RainLovePreferences.DEMO_MODE, true),
             selectedDeviceAddress = preferences.getString(RainLovePreferences.DEVICE_ADDRESS, null),
             selectedDeviceName = preferences.getString(RainLovePreferences.DEVICE_NAME, null),

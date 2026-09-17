@@ -156,6 +156,18 @@ private fun RainLoveScreen(vm: RainLoveViewModel) {
                         BilibiliVideo.normalizeBvid(state.bilibiliBvid) == null,
                     modifier = Modifier.fillMaxWidth(),
                 )
+                Row(
+                    Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Text("打开后尝试自动播放")
+                    Switch(
+                        checked = state.bilibiliAutoPlay,
+                        onCheckedChange = vm::setBilibiliAutoPlay,
+                        enabled = !state.monitoring,
+                    )
+                }
                 Text("后台或锁屏触发时，请点击通知打开视频；恢复后不会关闭 B 站。")
                 Button(
                     onClick = vm::testBilibiliVideo,

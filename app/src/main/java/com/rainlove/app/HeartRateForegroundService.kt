@@ -25,6 +25,7 @@ class HeartRateForegroundService : Service(), HeartRateSource.Listener {
     private var engine = HeartRateTriggerEngine()
     private var triggerTarget = TriggerTarget.LOCAL_MUSIC
     private var bilibiliBvid = ""
+    private var bilibiliAutoPlay = true
 
     override fun onCreate() {
         super.onCreate()
@@ -84,6 +85,7 @@ class HeartRateForegroundService : Service(), HeartRateSource.Listener {
             ?.let { runCatching { TriggerTarget.valueOf(it) }.getOrNull() }
             ?: TriggerTarget.LOCAL_MUSIC
         bilibiliBvid = preferences.getString(RainLovePreferences.BILIBILI_BVID, "") ?: ""
+        bilibiliAutoPlay = preferences.getBoolean(RainLovePreferences.BILIBILI_AUTO_PLAY, true)
     }
 
     override fun onHeartRate(bpm: Int) {
@@ -183,8 +185,9 @@ class HeartRateForegroundService : Service(), HeartRateSource.Listener {
         val openVideo = PendingIntent.getActivity(
             this,
             2,
-            Intent(Intent.ACTION_VIEW, uri).apply {
-                addCategory(Intent.CATEGORY_BROWSABLE)
+            Intent(this, BilibiliLaunchActivity::class.java).apply {
+                putExtra(BilibiliLaunchActivity.EXTRA_BVID, bvid)
+                putExtra(BilibiliLaunchActivity.EXTRA_AUTO_PLAY, bilibiliAutoPlay)
             },
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
         )
