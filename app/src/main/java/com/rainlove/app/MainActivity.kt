@@ -14,7 +14,10 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Button
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
@@ -49,13 +52,17 @@ private fun RainLoveScreen(vm: RainLoveViewModel) {
     val musicLauncher = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
         uri ?: return@rememberLauncherForActivityResult
         context.contentResolver.takePersistableUriPermission(uri, android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION)
-        val name = uri.lastPathSegment?.substringAfterLast('/') ?: "已选择的音乐"
-        vm.selectMusic(uri, name)
+        vm.selectMusic(uri)
     }
 
     Scaffold { padding ->
         Column(
-            modifier = Modifier.fillMaxSize().padding(padding).padding(24.dp),
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(padding)
+                .verticalScroll(rememberScrollState())
+                .navigationBarsPadding()
+                .padding(24.dp),
             verticalArrangement = Arrangement.spacedBy(18.dp),
             horizontalAlignment = Alignment.CenterHorizontally,
         ) {
@@ -78,6 +85,9 @@ private fun RainLoveScreen(vm: RainLoveViewModel) {
 
             SettingSlider("触发心率", state.triggerBpm, 80..200, vm::setTriggerBpm)
             SettingSlider("恢复心率", state.recoveryBpm, 50..180, vm::setRecoveryBpm)
+            SettingSlider("触发保持", state.triggerSeconds, 1..30, vm::setTriggerSeconds, "秒")
+            SettingSlider("恢复保持", state.recoverySeconds, 1..30, vm::setRecoverySeconds, "秒")
+            SettingSlider("冷却时间", state.cooldownSeconds, 0..300, vm::setCooldownSeconds, "秒")
 
             Text("音乐：${state.musicName}")
             Button(onClick = { musicLauncher.launch(arrayOf("audio/*")) }) { Text("选择本地音乐") }
@@ -96,9 +106,15 @@ private fun RainLoveScreen(vm: RainLoveViewModel) {
 }
 
 @Composable
-private fun SettingSlider(label: String, value: Int, range: IntRange, onChange: (Int) -> Unit) {
+private fun SettingSlider(
+    label: String,
+    value: Int,
+    range: IntRange,
+    onChange: (Int) -> Unit,
+    unit: String = "BPM",
+) {
     Column(Modifier.fillMaxWidth()) {
-        Text("$label：$value BPM")
+        Text("$label：$value $unit")
         Slider(value = value.toFloat(), onValueChange = { onChange(it.toInt()) }, valueRange = range.first.toFloat()..range.last.toFloat())
     }
 }
