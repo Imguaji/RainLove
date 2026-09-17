@@ -14,6 +14,8 @@ import android.bluetooth.le.ScanResult
 import android.bluetooth.le.ScanSettings
 import android.content.Context
 import android.os.Build
+import android.os.Handler
+import android.os.Looper
 import android.os.ParcelUuid
 import java.util.UUID
 
@@ -21,13 +23,23 @@ import java.util.UUID
 class BleHeartRateSource(
     private val context: Context,
     private val scanner: BluetoothLeScanner,
+    private val targetAddress: String? = null,
+    private val onConnectedDevice: (BleHeartRateDevice) -> Unit = {},
 ) : HeartRateSource {
     private var listener: HeartRateSource.Listener? = null
     private var gatt: BluetoothGatt? = null
+    private var running = false
+    private val handler = Handler(Looper.getMainLooper())
 
     override fun start(listener: HeartRateSource.Listener) {
         this.listener = listener
-        listener.onStatus("正在扫描标准 BLE 心率设备…")
+        running = true
+        startScan()
+    }
+
+    private fun startScan() {
+        if (!running) return
+        listener?.onStatus(if (targetAddress == null) "正在扫描标准 BLE 心率设备…" else "正在查找已选心率设备…")
         scanner.startScan(
             listOf(ScanFilter.Builder().setServiceUuid(ParcelUuid(HEART_RATE_SERVICE)).build()),
             ScanSettings.Builder().setScanMode(ScanSettings.SCAN_MODE_LOW_LATENCY).build(),
@@ -36,6 +48,8 @@ class BleHeartRateSource(
     }
 
     override fun stop() {
+        running = false
+        handler.removeCallbacksAndMessages(null)
         scanner.stopScan(scanCallback)
         gatt?.disconnect()
         gatt?.close()
@@ -45,6 +59,8 @@ class BleHeartRateSource(
 
     private val scanCallback = object : ScanCallback() {
         override fun onScanResult(callbackType: Int, result: ScanResult) {
+            if (targetAddress != null && result.device.address != targetAddress) return
+            if (gatt != null) return
             scanner.stopScan(this)
             listener?.onStatus("已发现 ${result.device.name ?: "心率设备"}，正在连接…")
             gatt = result.device.connectGatt(context, false, gattCallback, BluetoothDevice.TRANSPORT_LE)
@@ -58,10 +74,21 @@ class BleHeartRateSource(
     private val gattCallback = object : BluetoothGattCallback() {
         override fun onConnectionStateChange(gatt: BluetoothGatt, status: Int, newState: Int) {
             if (newState == BluetoothProfile.STATE_CONNECTED) {
+                onConnectedDevice(
+                    BleHeartRateDevice(
+                        name = gatt.device.name?.takeIf(String::isNotBlank) ?: "未命名心率设备",
+                        address = gatt.device.address,
+                    )
+                )
                 listener?.onStatus("已连接，正在读取心率服务…")
                 gatt.discoverServices()
             } else if (newState == BluetoothProfile.STATE_DISCONNECTED) {
-                listener?.onStatus("设备已断开")
+                gatt.close()
+                if (this@BleHeartRateSource.gatt === gatt) this@BleHeartRateSource.gatt = null
+                if (running) {
+                    listener?.onStatus("设备已断开，2 秒后重连…")
+                    handler.postDelayed(::startScan, RECONNECT_DELAY_MS)
+                }
             }
         }
 
@@ -90,6 +117,7 @@ class BleHeartRateSource(
         }
 
         @Deprecated("Deprecated in Android 13")
+        @Suppress("DEPRECATION")
         override fun onCharacteristicChanged(gatt: BluetoothGatt, characteristic: BluetoothGattCharacteristic) {
             parseHeartRate(characteristic.value)?.let { listener?.onHeartRate(it) }
         }
@@ -107,6 +135,7 @@ class BleHeartRateSource(
         private val HEART_RATE_SERVICE: UUID = UUID.fromString("0000180d-0000-1000-8000-00805f9b34fb")
         private val HEART_RATE_MEASUREMENT: UUID = UUID.fromString("00002a37-0000-1000-8000-00805f9b34fb")
         private val CLIENT_CHARACTERISTIC_CONFIG: UUID = UUID.fromString("00002902-0000-1000-8000-00805f9b34fb")
+        private const val RECONNECT_DELAY_MS = 2_000L
 
         internal fun parseHeartRate(value: ByteArray): Int? {
             if (value.size < 2) return null

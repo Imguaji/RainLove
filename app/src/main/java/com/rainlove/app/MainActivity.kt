@@ -27,6 +27,9 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
@@ -46,8 +49,16 @@ class MainActivity : ComponentActivity() {
 private fun RainLoveScreen(vm: RainLoveViewModel) {
     val state by vm.ui.collectAsState()
     val context = androidx.compose.ui.platform.LocalContext.current
+    var pendingBluetoothAction by remember { mutableStateOf(BluetoothAction.NONE) }
     val permissionLauncher = rememberLauncherForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { result ->
-        if (result.values.all { it }) vm.toggleMonitoring()
+        if (result.values.all { it }) {
+            when (pendingBluetoothAction) {
+                BluetoothAction.SCAN -> vm.scanForDevices()
+                BluetoothAction.START -> vm.toggleMonitoring()
+                BluetoothAction.NONE -> Unit
+            }
+        }
+        pendingBluetoothAction = BluetoothAction.NONE
     }
     val musicLauncher = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
         uri ?: return@rememberLauncherForActivityResult
@@ -81,6 +92,26 @@ private fun RainLoveScreen(vm: RainLoveViewModel) {
                     onValueChange = { vm.setDemoBpm(it.toInt()) },
                     valueRange = 40f..200f,
                 )
+            } else {
+                Text("心率设备：${state.selectedDeviceName ?: "自动选择"}")
+                Button(onClick = {
+                    val permissions = missingBluetoothPermissions(context)
+                    if (permissions.isEmpty()) vm.scanForDevices()
+                    else {
+                        pendingBluetoothAction = BluetoothAction.SCAN
+                        permissionLauncher.launch(permissions.toTypedArray())
+                    }
+                }, enabled = !state.monitoring) {
+                    Text(if (state.scanningDevices) "正在扫描…" else "扫描心率设备")
+                }
+                if (state.selectedDeviceAddress != null) {
+                    Button(onClick = { vm.selectDevice(null) }, enabled = !state.monitoring) { Text("改为自动选择") }
+                }
+                state.availableDevices.forEach { device ->
+                    Button(onClick = { vm.selectDevice(device) }, enabled = !state.monitoring) {
+                        Text("${device.name} · ${device.address}")
+                    }
+                }
             }
 
             SettingSlider("触发心率", state.triggerBpm, 80..200, vm::setTriggerBpm)
@@ -92,11 +123,11 @@ private fun RainLoveScreen(vm: RainLoveViewModel) {
             Text("音乐：${state.musicName}")
             Button(onClick = { musicLauncher.launch(arrayOf("audio/*")) }) { Text("选择本地音乐") }
             Button(onClick = {
-                val permissions = requiredBluetoothPermissions().filter {
-                    ContextCompat.checkSelfPermission(context, it) != PackageManager.PERMISSION_GRANTED
-                }
-                if (!state.demoMode && permissions.isNotEmpty()) permissionLauncher.launch(permissions.toTypedArray())
-                else vm.toggleMonitoring()
+                val permissions = missingBluetoothPermissions(context)
+                if (!state.demoMode && permissions.isNotEmpty()) {
+                    pendingBluetoothAction = BluetoothAction.START
+                    permissionLauncher.launch(permissions.toTypedArray())
+                } else vm.toggleMonitoring()
             }) {
                 Text(if (state.monitoring) "停止心动模式" else "开启心动模式")
             }
@@ -122,3 +153,9 @@ private fun SettingSlider(
 private fun requiredBluetoothPermissions(): List<String> = if (Build.VERSION.SDK_INT >= 31) {
     listOf(Manifest.permission.BLUETOOTH_SCAN, Manifest.permission.BLUETOOTH_CONNECT)
 } else listOf(Manifest.permission.ACCESS_FINE_LOCATION)
+
+private fun missingBluetoothPermissions(context: android.content.Context) = requiredBluetoothPermissions().filter {
+    ContextCompat.checkSelfPermission(context, it) != PackageManager.PERMISSION_GRANTED
+}
+
+private enum class BluetoothAction { NONE, SCAN, START }

@@ -8,8 +8,11 @@ import android.os.SystemClock
 import android.provider.OpenableColumns
 import androidx.lifecycle.AndroidViewModel
 import com.rainlove.app.media.MusicPlayer
+import com.rainlove.app.sensor.BleHeartRateDevice
+import com.rainlove.app.sensor.BleHeartRateScanner
 import com.rainlove.app.sensor.BleHeartRateSource
 import com.rainlove.app.sensor.HeartRateSource
+import com.rainlove.app.sensor.mergeHeartRateDevices
 import com.rainlove.app.trigger.HeartRateTriggerEngine
 import com.rainlove.app.trigger.TriggerConfig
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -26,6 +29,10 @@ data class RainLoveUiState(
     val musicName: String = "尚未选择音乐",
     val demoMode: Boolean = true,
     val monitoring: Boolean = false,
+    val scanningDevices: Boolean = false,
+    val availableDevices: List<BleHeartRateDevice> = emptyList(),
+    val selectedDeviceAddress: String? = null,
+    val selectedDeviceName: String? = null,
     val triggerState: HeartRateTriggerEngine.State = HeartRateTriggerEngine.State.ARMED,
 )
 
@@ -37,6 +44,7 @@ class RainLoveViewModel(application: Application) : AndroidViewModel(application
     val ui = _ui.asStateFlow()
     private var engine = HeartRateTriggerEngine(_ui.value.toTriggerConfig())
     private var bleSource: BleHeartRateSource? = null
+    private var deviceScanner: BleHeartRateScanner? = null
 
     init {
         preferences.getString(KEY_MUSIC_URI, null)?.let { musicPlayer.select(Uri.parse(it)) }
@@ -47,12 +55,18 @@ class RainLoveViewModel(application: Application) : AndroidViewModel(application
     }
 
     private fun start() {
+        stopDeviceScan()
         rebuildEngine()
         _ui.value = _ui.value.copy(monitoring = true, status = if (_ui.value.demoMode) "Demo 模式运行中" else "准备扫描")
         if (!_ui.value.demoMode) {
             val scanner = bluetoothManager?.adapter?.bluetoothLeScanner
             if (scanner == null) onError("蓝牙不可用")
-            else BleHeartRateSource(getApplication(), scanner).also { bleSource = it }.start(this)
+            else BleHeartRateSource(
+                context = getApplication(),
+                scanner = scanner,
+                targetAddress = _ui.value.selectedDeviceAddress,
+                onConnectedDevice = ::rememberConnectedDevice,
+            ).also { bleSource = it }.start(this)
         }
     }
 
@@ -66,6 +80,7 @@ class RainLoveViewModel(application: Application) : AndroidViewModel(application
 
     fun setDemoMode(enabled: Boolean) {
         if (_ui.value.monitoring) stop()
+        if (enabled) stopDeviceScan()
         _ui.value = _ui.value.copy(demoMode = enabled)
         preferences.edit().putBoolean(KEY_DEMO_MODE, enabled).apply()
     }
@@ -73,6 +88,58 @@ class RainLoveViewModel(application: Application) : AndroidViewModel(application
     fun setDemoBpm(value: Int) {
         _ui.value = _ui.value.copy(bpm = value)
         if (_ui.value.monitoring && _ui.value.demoMode) handleHeartRate(value)
+    }
+
+    fun scanForDevices() {
+        if (_ui.value.monitoring || _ui.value.demoMode) return
+        val scanner = bluetoothManager?.adapter?.bluetoothLeScanner
+        if (scanner == null) {
+            onError("蓝牙不可用")
+            return
+        }
+        deviceScanner?.stop()
+        _ui.value = _ui.value.copy(
+            scanningDevices = true,
+            availableDevices = emptyList(),
+            status = "正在查找心率设备…",
+        )
+        BleHeartRateScanner(scanner).also { discovery ->
+            deviceScanner = discovery
+            discovery.start(
+                onDevice = { device ->
+                    val devices = mergeHeartRateDevices(_ui.value.availableDevices, device)
+                    _ui.value = _ui.value.copy(availableDevices = devices, status = "请选择心率设备")
+                },
+                onError = { message ->
+                    deviceScanner = null
+                    _ui.value = _ui.value.copy(scanningDevices = false, status = message)
+                },
+                onFinished = {
+                    deviceScanner = null
+                    _ui.value = _ui.value.copy(
+                        scanningDevices = false,
+                        status = if (_ui.value.availableDevices.isEmpty()) {
+                            "未发现心率设备，请确认设备正在广播"
+                        } else {
+                            "扫描完成，请选择心率设备"
+                        },
+                    )
+                },
+            )
+        }
+    }
+
+    fun selectDevice(device: BleHeartRateDevice?) {
+        stopDeviceScan()
+        _ui.value = _ui.value.copy(
+            selectedDeviceAddress = device?.address,
+            selectedDeviceName = device?.name,
+            status = if (device == null) "将自动连接附近兼容设备" else "已选择 ${device.name}",
+        )
+        preferences.edit()
+            .putString(KEY_DEVICE_ADDRESS, device?.address)
+            .putString(KEY_DEVICE_NAME, device?.name)
+            .apply()
     }
 
     fun setTriggerBpm(value: Int) {
@@ -155,6 +222,8 @@ class RainLoveViewModel(application: Application) : AndroidViewModel(application
             cooldownSeconds = preferences.getInt(KEY_COOLDOWN_SECONDS, 60).coerceIn(0, 300),
             musicName = preferences.getString(KEY_MUSIC_NAME, null) ?: "尚未选择音乐",
             demoMode = preferences.getBoolean(KEY_DEMO_MODE, true),
+            selectedDeviceAddress = preferences.getString(KEY_DEVICE_ADDRESS, null),
+            selectedDeviceName = preferences.getString(KEY_DEVICE_NAME, null),
         )
     }
 
@@ -170,8 +239,26 @@ class RainLoveViewModel(application: Application) : AndroidViewModel(application
     }
 
     override fun onCleared() {
+        deviceScanner?.stop()
         bleSource?.stop()
         musicPlayer.release()
+    }
+
+    private fun stopDeviceScan() {
+        deviceScanner?.stop()
+        deviceScanner = null
+        _ui.value = _ui.value.copy(scanningDevices = false)
+    }
+
+    private fun rememberConnectedDevice(device: BleHeartRateDevice) {
+        _ui.value = _ui.value.copy(
+            selectedDeviceAddress = device.address,
+            selectedDeviceName = device.name,
+        )
+        preferences.edit()
+            .putString(KEY_DEVICE_ADDRESS, device.address)
+            .putString(KEY_DEVICE_NAME, device.name)
+            .apply()
     }
 
     private fun RainLoveUiState.toTriggerConfig() = TriggerConfig(
@@ -192,5 +279,7 @@ class RainLoveViewModel(application: Application) : AndroidViewModel(application
         private const val KEY_DEMO_MODE = "demo_mode"
         private const val KEY_MUSIC_URI = "music_uri"
         private const val KEY_MUSIC_NAME = "music_name"
+        private const val KEY_DEVICE_ADDRESS = "device_address"
+        private const val KEY_DEVICE_NAME = "device_name"
     }
 }
