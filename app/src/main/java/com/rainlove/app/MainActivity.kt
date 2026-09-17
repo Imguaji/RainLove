@@ -50,13 +50,11 @@ private fun RainLoveScreen(vm: RainLoveViewModel) {
     val state by vm.ui.collectAsState()
     val context = androidx.compose.ui.platform.LocalContext.current
     var pendingBluetoothAction by remember { mutableStateOf(BluetoothAction.NONE) }
-    val permissionLauncher = rememberLauncherForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { result ->
-        if (result.values.all { it }) {
-            when (pendingBluetoothAction) {
-                BluetoothAction.SCAN -> vm.scanForDevices()
-                BluetoothAction.START -> vm.toggleMonitoring()
-                BluetoothAction.NONE -> Unit
-            }
+    val permissionLauncher = rememberLauncherForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) {
+        when (pendingBluetoothAction) {
+            BluetoothAction.SCAN -> if (missingBluetoothPermissions(context).isEmpty()) vm.scanForDevices()
+            BluetoothAction.START -> if (missingBluetoothPermissions(context).isEmpty()) vm.toggleMonitoring()
+            BluetoothAction.NONE -> Unit
         }
         pendingBluetoothAction = BluetoothAction.NONE
     }
@@ -114,16 +112,19 @@ private fun RainLoveScreen(vm: RainLoveViewModel) {
                 }
             }
 
-            SettingSlider("触发心率", state.triggerBpm, 80..200, vm::setTriggerBpm)
-            SettingSlider("恢复心率", state.recoveryBpm, 50..180, vm::setRecoveryBpm)
-            SettingSlider("触发保持", state.triggerSeconds, 1..30, vm::setTriggerSeconds, "秒")
-            SettingSlider("恢复保持", state.recoverySeconds, 1..30, vm::setRecoverySeconds, "秒")
-            SettingSlider("冷却时间", state.cooldownSeconds, 0..300, vm::setCooldownSeconds, "秒")
+            SettingSlider("触发心率", state.triggerBpm, 80..200, vm::setTriggerBpm, enabled = !state.monitoring)
+            SettingSlider("恢复心率", state.recoveryBpm, 50..180, vm::setRecoveryBpm, enabled = !state.monitoring)
+            SettingSlider("触发保持", state.triggerSeconds, 1..30, vm::setTriggerSeconds, unit = "秒", enabled = !state.monitoring)
+            SettingSlider("恢复保持", state.recoverySeconds, 1..30, vm::setRecoverySeconds, unit = "秒", enabled = !state.monitoring)
+            SettingSlider("冷却时间", state.cooldownSeconds, 0..300, vm::setCooldownSeconds, unit = "秒", enabled = !state.monitoring)
 
             Text("音乐：${state.musicName}")
-            Button(onClick = { musicLauncher.launch(arrayOf("audio/*")) }) { Text("选择本地音乐") }
+            Button(
+                onClick = { musicLauncher.launch(arrayOf("audio/*")) },
+                enabled = !state.monitoring,
+            ) { Text("选择本地音乐") }
             Button(onClick = {
-                val permissions = missingBluetoothPermissions(context)
+                val permissions = missingMonitoringPermissions(context)
                 if (!state.demoMode && permissions.isNotEmpty()) {
                     pendingBluetoothAction = BluetoothAction.START
                     permissionLauncher.launch(permissions.toTypedArray())
@@ -143,10 +144,16 @@ private fun SettingSlider(
     range: IntRange,
     onChange: (Int) -> Unit,
     unit: String = "BPM",
+    enabled: Boolean = true,
 ) {
     Column(Modifier.fillMaxWidth()) {
         Text("$label：$value $unit")
-        Slider(value = value.toFloat(), onValueChange = { onChange(it.toInt()) }, valueRange = range.first.toFloat()..range.last.toFloat())
+        Slider(
+            value = value.toFloat(),
+            onValueChange = { onChange(it.toInt()) },
+            valueRange = range.first.toFloat()..range.last.toFloat(),
+            enabled = enabled,
+        )
     }
 }
 
@@ -156,6 +163,12 @@ private fun requiredBluetoothPermissions(): List<String> = if (Build.VERSION.SDK
 
 private fun missingBluetoothPermissions(context: android.content.Context) = requiredBluetoothPermissions().filter {
     ContextCompat.checkSelfPermission(context, it) != PackageManager.PERMISSION_GRANTED
+}
+
+private fun missingMonitoringPermissions(context: android.content.Context): List<String> {
+    val permissions = requiredBluetoothPermissions().toMutableList()
+    if (Build.VERSION.SDK_INT >= 33) permissions += Manifest.permission.POST_NOTIFICATIONS
+    return permissions.filter { ContextCompat.checkSelfPermission(context, it) != PackageManager.PERMISSION_GRANTED }
 }
 
 private enum class BluetoothAction { NONE, SCAN, START }

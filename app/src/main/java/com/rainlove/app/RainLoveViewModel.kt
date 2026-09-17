@@ -2,16 +2,18 @@ package com.rainlove.app
 
 import android.app.Application
 import android.bluetooth.BluetoothManager
+import android.content.BroadcastReceiver
 import android.content.Context
+import android.content.Intent
+import android.content.IntentFilter
 import android.net.Uri
 import android.os.SystemClock
 import android.provider.OpenableColumns
+import androidx.core.content.ContextCompat
 import androidx.lifecycle.AndroidViewModel
 import com.rainlove.app.media.MusicPlayer
 import com.rainlove.app.sensor.BleHeartRateDevice
 import com.rainlove.app.sensor.BleHeartRateScanner
-import com.rainlove.app.sensor.BleHeartRateSource
-import com.rainlove.app.sensor.HeartRateSource
 import com.rainlove.app.sensor.mergeHeartRateDevices
 import com.rainlove.app.trigger.HeartRateTriggerEngine
 import com.rainlove.app.trigger.TriggerConfig
@@ -36,18 +38,64 @@ data class RainLoveUiState(
     val triggerState: HeartRateTriggerEngine.State = HeartRateTriggerEngine.State.ARMED,
 )
 
-class RainLoveViewModel(application: Application) : AndroidViewModel(application), HeartRateSource.Listener {
-    private val preferences = application.getSharedPreferences(PREFERENCES_NAME, Context.MODE_PRIVATE)
+class RainLoveViewModel(application: Application) : AndroidViewModel(application) {
+    private val preferences = application.getSharedPreferences(RainLovePreferences.NAME, Context.MODE_PRIVATE)
     private val musicPlayer = MusicPlayer(application)
     private val bluetoothManager = application.getSystemService(BluetoothManager::class.java)
     private val _ui = MutableStateFlow(loadState())
     val ui = _ui.asStateFlow()
     private var engine = HeartRateTriggerEngine(_ui.value.toTriggerConfig())
-    private var bleSource: BleHeartRateSource? = null
     private var deviceScanner: BleHeartRateScanner? = null
 
+    private val serviceStateReceiver = object : BroadcastReceiver() {
+        override fun onReceive(context: Context?, intent: Intent?) {
+            if (intent?.action != HeartRateForegroundService.ACTION_STATE) return
+            var state = _ui.value
+            if (intent.hasExtra(HeartRateForegroundService.EXTRA_MONITORING)) {
+                state = state.copy(
+                    monitoring = intent.getBooleanExtra(HeartRateForegroundService.EXTRA_MONITORING, false)
+                )
+            }
+            intent.getStringExtra(HeartRateForegroundService.EXTRA_STATUS)?.let {
+                state = state.copy(status = it)
+            }
+            if (intent.hasExtra(HeartRateForegroundService.EXTRA_BPM)) {
+                state = state.copy(
+                    bpm = intent.getIntExtra(HeartRateForegroundService.EXTRA_BPM, state.bpm)
+                )
+            }
+            intent.getStringExtra(HeartRateForegroundService.EXTRA_TRIGGER_STATE)?.let { rawState ->
+                runCatching { HeartRateTriggerEngine.State.valueOf(rawState) }.getOrNull()?.let {
+                    state = state.copy(triggerState = it)
+                }
+            }
+            val address = intent.getStringExtra(HeartRateForegroundService.EXTRA_DEVICE_ADDRESS)
+            val name = intent.getStringExtra(HeartRateForegroundService.EXTRA_DEVICE_NAME)
+            if (address != null && name != null) {
+                state = state.copy(selectedDeviceAddress = address, selectedDeviceName = name)
+            }
+            _ui.value = state
+        }
+    }
+
     init {
-        preferences.getString(KEY_MUSIC_URI, null)?.let { musicPlayer.select(Uri.parse(it)) }
+        preferences.getString(RainLovePreferences.MUSIC_URI, null)?.let {
+            musicPlayer.select(Uri.parse(it))
+        }
+        val filter = IntentFilter(HeartRateForegroundService.ACTION_STATE)
+        ContextCompat.registerReceiver(
+            application,
+            serviceStateReceiver,
+            filter,
+            ContextCompat.RECEIVER_NOT_EXPORTED,
+        )
+        if (HeartRateForegroundService.isRunning) {
+            _ui.value = _ui.value.copy(
+                monitoring = true,
+                demoMode = false,
+                status = HeartRateForegroundService.currentStatus,
+            )
+        }
     }
 
     fun toggleMonitoring() {
@@ -57,44 +105,49 @@ class RainLoveViewModel(application: Application) : AndroidViewModel(application
     private fun start() {
         stopDeviceScan()
         rebuildEngine()
-        _ui.value = _ui.value.copy(monitoring = true, status = if (_ui.value.demoMode) "Demo 模式运行中" else "准备扫描")
-        if (!_ui.value.demoMode) {
-            val scanner = bluetoothManager?.adapter?.bluetoothLeScanner
-            if (scanner == null) onError("蓝牙不可用")
-            else BleHeartRateSource(
-                context = getApplication(),
-                scanner = scanner,
-                targetAddress = _ui.value.selectedDeviceAddress,
-                onConnectedDevice = ::rememberConnectedDevice,
-            ).also { bleSource = it }.start(this)
+        if (_ui.value.demoMode) {
+            _ui.value = _ui.value.copy(monitoring = true, status = "Demo 模式运行中")
+        } else {
+            _ui.value = _ui.value.copy(monitoring = true, status = "正在启动后台监测…")
+            ContextCompat.startForegroundService(
+                getApplication(),
+                Intent(getApplication(), HeartRateForegroundService::class.java)
+                    .setAction(HeartRateForegroundService.ACTION_START),
+            )
         }
     }
 
     private fun stop() {
-        bleSource?.stop()
-        bleSource = null
-        musicPlayer.pause()
-        engine.reset(SystemClock.elapsedRealtime())
-        _ui.value = _ui.value.copy(monitoring = false, status = "已停止", triggerState = engine.state)
+        if (_ui.value.demoMode) {
+            musicPlayer.pause()
+            engine.reset(SystemClock.elapsedRealtime())
+            _ui.value = _ui.value.copy(monitoring = false, status = "已停止", triggerState = engine.state)
+        } else {
+            getApplication<Application>().startService(
+                Intent(getApplication(), HeartRateForegroundService::class.java)
+                    .setAction(HeartRateForegroundService.ACTION_STOP)
+            )
+            _ui.value = _ui.value.copy(monitoring = false, status = "已停止")
+        }
     }
 
     fun setDemoMode(enabled: Boolean) {
         if (_ui.value.monitoring) stop()
         if (enabled) stopDeviceScan()
         _ui.value = _ui.value.copy(demoMode = enabled)
-        preferences.edit().putBoolean(KEY_DEMO_MODE, enabled).apply()
+        preferences.edit().putBoolean(RainLovePreferences.DEMO_MODE, enabled).apply()
     }
 
     fun setDemoBpm(value: Int) {
         _ui.value = _ui.value.copy(bpm = value)
-        if (_ui.value.monitoring && _ui.value.demoMode) handleHeartRate(value)
+        if (_ui.value.monitoring && _ui.value.demoMode) handleDemoHeartRate(value)
     }
 
     fun scanForDevices() {
         if (_ui.value.monitoring || _ui.value.demoMode) return
         val scanner = bluetoothManager?.adapter?.bluetoothLeScanner
         if (scanner == null) {
-            onError("蓝牙不可用")
+            _ui.value = _ui.value.copy(status = "蓝牙不可用")
             return
         }
         deviceScanner?.stop()
@@ -107,8 +160,10 @@ class RainLoveViewModel(application: Application) : AndroidViewModel(application
             deviceScanner = discovery
             discovery.start(
                 onDevice = { device ->
-                    val devices = mergeHeartRateDevices(_ui.value.availableDevices, device)
-                    _ui.value = _ui.value.copy(availableDevices = devices, status = "请选择心率设备")
+                    _ui.value = _ui.value.copy(
+                        availableDevices = mergeHeartRateDevices(_ui.value.availableDevices, device),
+                        status = "请选择心率设备",
+                    )
                 },
                 onError = { message ->
                     deviceScanner = null
@@ -137,8 +192,8 @@ class RainLoveViewModel(application: Application) : AndroidViewModel(application
             status = if (device == null) "将自动连接附近兼容设备" else "已选择 ${device.name}",
         )
         preferences.edit()
-            .putString(KEY_DEVICE_ADDRESS, device?.address)
-            .putString(KEY_DEVICE_NAME, device?.name)
+            .putString(RainLovePreferences.DEVICE_ADDRESS, device?.address)
+            .putString(RainLovePreferences.DEVICE_NAME, device?.name)
             .apply()
     }
 
@@ -185,23 +240,20 @@ class RainLoveViewModel(application: Application) : AndroidViewModel(application
         musicPlayer.select(uri)
         _ui.value = _ui.value.copy(musicName = name)
         preferences.edit()
-            .putString(KEY_MUSIC_URI, uri.toString())
-            .putString(KEY_MUSIC_NAME, name)
+            .putString(RainLovePreferences.MUSIC_URI, uri.toString())
+            .putString(RainLovePreferences.MUSIC_NAME, name)
             .apply()
     }
 
-    override fun onHeartRate(bpm: Int) = handleHeartRate(bpm)
-    override fun onStatus(message: String) { _ui.value = _ui.value.copy(status = message) }
-    override fun onError(message: String) { _ui.value = _ui.value.copy(status = message, monitoring = false) }
-
-    private fun handleHeartRate(bpm: Int) {
+    private fun handleDemoHeartRate(bpm: Int) {
         when (engine.onHeartRate(bpm, SystemClock.elapsedRealtime())) {
             HeartRateTriggerEngine.Event.StartPlayback -> {
-                if (!musicPlayer.play()) onStatus("已触发，但尚未选择音乐") else onStatus("达到触发条件，正在播放")
+                val status = if (musicPlayer.play()) "达到触发条件，正在播放" else "已触发，但尚未选择音乐"
+                _ui.value = _ui.value.copy(status = status)
             }
             HeartRateTriggerEngine.Event.StopPlayback -> {
                 musicPlayer.pause()
-                onStatus("心率已恢复，进入冷却")
+                _ui.value = _ui.value.copy(status = "心率已恢复，进入冷却")
             }
             null -> Unit
         }
@@ -213,34 +265,34 @@ class RainLoveViewModel(application: Application) : AndroidViewModel(application
     }
 
     private fun loadState(): RainLoveUiState {
-        val triggerBpm = preferences.getInt(KEY_TRIGGER_BPM, 120).coerceIn(80, 200)
+        val triggerBpm = preferences.getInt(RainLovePreferences.TRIGGER_BPM, 120).coerceIn(80, 200)
         return RainLoveUiState(
             triggerBpm = triggerBpm,
-            recoveryBpm = preferences.getInt(KEY_RECOVERY_BPM, 110).coerceIn(50, triggerBpm - 1),
-            triggerSeconds = preferences.getInt(KEY_TRIGGER_SECONDS, 5).coerceIn(1, 30),
-            recoverySeconds = preferences.getInt(KEY_RECOVERY_SECONDS, 10).coerceIn(1, 30),
-            cooldownSeconds = preferences.getInt(KEY_COOLDOWN_SECONDS, 60).coerceIn(0, 300),
-            musicName = preferences.getString(KEY_MUSIC_NAME, null) ?: "尚未选择音乐",
-            demoMode = preferences.getBoolean(KEY_DEMO_MODE, true),
-            selectedDeviceAddress = preferences.getString(KEY_DEVICE_ADDRESS, null),
-            selectedDeviceName = preferences.getString(KEY_DEVICE_NAME, null),
+            recoveryBpm = preferences.getInt(RainLovePreferences.RECOVERY_BPM, 110).coerceIn(50, triggerBpm - 1),
+            triggerSeconds = preferences.getInt(RainLovePreferences.TRIGGER_SECONDS, 5).coerceIn(1, 30),
+            recoverySeconds = preferences.getInt(RainLovePreferences.RECOVERY_SECONDS, 10).coerceIn(1, 30),
+            cooldownSeconds = preferences.getInt(RainLovePreferences.COOLDOWN_SECONDS, 60).coerceIn(0, 300),
+            musicName = preferences.getString(RainLovePreferences.MUSIC_NAME, null) ?: "尚未选择音乐",
+            demoMode = preferences.getBoolean(RainLovePreferences.DEMO_MODE, true),
+            selectedDeviceAddress = preferences.getString(RainLovePreferences.DEVICE_ADDRESS, null),
+            selectedDeviceName = preferences.getString(RainLovePreferences.DEVICE_NAME, null),
         )
     }
 
     private fun persistSettings() {
         val state = _ui.value
         preferences.edit()
-            .putInt(KEY_TRIGGER_BPM, state.triggerBpm)
-            .putInt(KEY_RECOVERY_BPM, state.recoveryBpm)
-            .putInt(KEY_TRIGGER_SECONDS, state.triggerSeconds)
-            .putInt(KEY_RECOVERY_SECONDS, state.recoverySeconds)
-            .putInt(KEY_COOLDOWN_SECONDS, state.cooldownSeconds)
+            .putInt(RainLovePreferences.TRIGGER_BPM, state.triggerBpm)
+            .putInt(RainLovePreferences.RECOVERY_BPM, state.recoveryBpm)
+            .putInt(RainLovePreferences.TRIGGER_SECONDS, state.triggerSeconds)
+            .putInt(RainLovePreferences.RECOVERY_SECONDS, state.recoverySeconds)
+            .putInt(RainLovePreferences.COOLDOWN_SECONDS, state.cooldownSeconds)
             .apply()
     }
 
     override fun onCleared() {
         deviceScanner?.stop()
-        bleSource?.stop()
+        getApplication<Application>().unregisterReceiver(serviceStateReceiver)
         musicPlayer.release()
     }
 
@@ -250,17 +302,6 @@ class RainLoveViewModel(application: Application) : AndroidViewModel(application
         _ui.value = _ui.value.copy(scanningDevices = false)
     }
 
-    private fun rememberConnectedDevice(device: BleHeartRateDevice) {
-        _ui.value = _ui.value.copy(
-            selectedDeviceAddress = device.address,
-            selectedDeviceName = device.name,
-        )
-        preferences.edit()
-            .putString(KEY_DEVICE_ADDRESS, device.address)
-            .putString(KEY_DEVICE_NAME, device.name)
-            .apply()
-    }
-
     private fun RainLoveUiState.toTriggerConfig() = TriggerConfig(
         triggerBpm = triggerBpm,
         triggerDurationMs = triggerSeconds * 1_000L,
@@ -268,18 +309,4 @@ class RainLoveViewModel(application: Application) : AndroidViewModel(application
         recoveryDurationMs = recoverySeconds * 1_000L,
         cooldownMs = cooldownSeconds * 1_000L,
     )
-
-    companion object {
-        private const val PREFERENCES_NAME = "rainlove_settings"
-        private const val KEY_TRIGGER_BPM = "trigger_bpm"
-        private const val KEY_RECOVERY_BPM = "recovery_bpm"
-        private const val KEY_TRIGGER_SECONDS = "trigger_seconds"
-        private const val KEY_RECOVERY_SECONDS = "recovery_seconds"
-        private const val KEY_COOLDOWN_SECONDS = "cooldown_seconds"
-        private const val KEY_DEMO_MODE = "demo_mode"
-        private const val KEY_MUSIC_URI = "music_uri"
-        private const val KEY_MUSIC_NAME = "music_name"
-        private const val KEY_DEVICE_ADDRESS = "device_address"
-        private const val KEY_DEVICE_NAME = "device_name"
-    }
 }
