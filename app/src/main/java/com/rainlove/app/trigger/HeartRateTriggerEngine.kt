@@ -21,6 +21,14 @@ class HeartRateTriggerEngine(private var config: TriggerConfig = TriggerConfig()
         stateSinceMs = nowMs
     }
 
+    /** Returns the remaining delay before the current state can advance without a new BLE sample. */
+    fun nextTransitionDelayMs(nowMs: Long): Long? = when (state) {
+        State.HIGH_PENDING -> (config.triggerDurationMs - (nowMs - stateSinceMs)).coerceAtLeast(0)
+        State.RECOVERY_PENDING -> (config.recoveryDurationMs - (nowMs - stateSinceMs)).coerceAtLeast(0)
+        State.COOLDOWN -> (config.cooldownMs - (nowMs - stateSinceMs)).coerceAtLeast(0)
+        State.ARMED, State.PLAYING -> null
+    }
+
     fun onHeartRate(bpm: Int, nowMs: Long): Event? {
         return when (state) {
             State.ARMED -> {
@@ -54,8 +62,9 @@ class HeartRateTriggerEngine(private var config: TriggerConfig = TriggerConfig()
                 else -> null
             }
             State.COOLDOWN -> {
-                if (nowMs - stateSinceMs >= config.cooldownMs) transition(State.ARMED, nowMs)
-                null
+                if (nowMs - stateSinceMs < config.cooldownMs) return null
+                transition(State.ARMED, nowMs)
+                onHeartRate(bpm, nowMs)
             }
         }
     }

@@ -29,6 +29,8 @@ class HeartRateForegroundService : Service(), HeartRateSource.Listener {
     private var bilibiliBvid = ""
     private var bilibiliAutoPlay = true
     private val mainHandler = Handler(Looper.getMainLooper())
+    private var lastHeartRateBpm: Int? = null
+    private val stateAdvanceRunnable = Runnable { lastHeartRateBpm?.let(::processHeartRate) }
 
     override fun onCreate() {
         super.onCreate()
@@ -56,6 +58,7 @@ class HeartRateForegroundService : Service(), HeartRateSource.Listener {
         }
 
         loadSessionSettings()
+        lastHeartRateBpm = null
         isRunning = true
         currentStatus = "正在启动心率监测…"
         startForeground(NOTIFICATION_ID, buildNotification("正在启动心率监测…"))
@@ -97,7 +100,25 @@ class HeartRateForegroundService : Service(), HeartRateSource.Listener {
             return
         }
         if (!isRunning) return
-        when (engine.onHeartRate(bpm, SystemClock.elapsedRealtime())) {
+        lastHeartRateBpm = bpm
+        processHeartRate(bpm)
+    }
+
+    override fun onConnectionChanged(connected: Boolean) {
+        if (Looper.myLooper() != Looper.getMainLooper()) {
+            mainHandler.post { onConnectionChanged(connected) }
+            return
+        }
+        if (connected || !isRunning) return
+        lastHeartRateBpm = null
+        mainHandler.removeCallbacks(stateAdvanceRunnable)
+        engine.reset(SystemClock.elapsedRealtime())
+        broadcastState(triggerState = engine.state)
+    }
+
+    private fun processHeartRate(bpm: Int) {
+        val nowMs = SystemClock.elapsedRealtime()
+        when (engine.onHeartRate(bpm, nowMs)) {
             HeartRateTriggerEngine.Event.StartPlayback -> {
                 when (triggerTarget) {
                     TriggerTarget.LOCAL_MUSIC -> {
@@ -114,6 +135,14 @@ class HeartRateForegroundService : Service(), HeartRateSource.Listener {
             null -> Unit
         }
         broadcastState(bpm = bpm, triggerState = engine.state)
+        scheduleStateAdvance(nowMs)
+    }
+
+    private fun scheduleStateAdvance(nowMs: Long) {
+        mainHandler.removeCallbacks(stateAdvanceRunnable)
+        engine.nextTransitionDelayMs(nowMs)?.let { delayMs ->
+            mainHandler.postDelayed(stateAdvanceRunnable, delayMs)
+        }
     }
 
     override fun onStatus(message: String) {
@@ -160,6 +189,8 @@ class HeartRateForegroundService : Service(), HeartRateSource.Listener {
     private fun stopMonitoring(status: String) {
         isRunning = false
         currentStatus = status
+        lastHeartRateBpm = null
+        mainHandler.removeCallbacks(stateAdvanceRunnable)
         val source = heartRateSource
         heartRateSource = null
         source?.stop()

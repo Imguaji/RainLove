@@ -74,6 +74,7 @@ class BleHeartRateSource(
     private val gattCallback = object : BluetoothGattCallback() {
         override fun onConnectionStateChange(gatt: BluetoothGatt, status: Int, newState: Int) {
             if (newState == BluetoothProfile.STATE_CONNECTED) {
+                listener?.onConnectionChanged(true)
                 onConnectedDevice(
                     BleHeartRateDevice(
                         name = gatt.device.name?.takeIf(String::isNotBlank) ?: "未命名心率设备",
@@ -85,6 +86,7 @@ class BleHeartRateSource(
             } else if (newState == BluetoothProfile.STATE_DISCONNECTED) {
                 gatt.close()
                 if (this@BleHeartRateSource.gatt === gatt) this@BleHeartRateSource.gatt = null
+                listener?.onConnectionChanged(false)
                 if (running) {
                     listener?.onStatus("设备已断开，2 秒后重连…")
                     handler.postDelayed(::startScan, RECONNECT_DELAY_MS)
