@@ -20,6 +20,8 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Button
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.RadioButton
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Slider
 import androidx.compose.material3.Switch
@@ -35,6 +37,8 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.core.content.ContextCompat
+import com.rainlove.app.media.BilibiliVideo
+import com.rainlove.app.media.TriggerTarget
 
 class MainActivity : ComponentActivity() {
     private val viewModel: RainLoveViewModel by viewModels()
@@ -118,11 +122,42 @@ private fun RainLoveScreen(vm: RainLoveViewModel) {
             SettingSlider("恢复保持", state.recoverySeconds, 1..30, vm::setRecoverySeconds, unit = "秒", enabled = !state.monitoring)
             SettingSlider("冷却时间", state.cooldownSeconds, 0..300, vm::setCooldownSeconds, unit = "秒", enabled = !state.monitoring)
 
-            Text("音乐：${state.musicName}")
-            Button(
-                onClick = { musicLauncher.launch(arrayOf("audio/*")) },
+            Text("触发后执行")
+            TriggerTargetOption(
+                label = "播放本地音乐",
+                selected = state.triggerTarget == TriggerTarget.LOCAL_MUSIC,
                 enabled = !state.monitoring,
-            ) { Text("选择本地音乐") }
+                onClick = { vm.setTriggerTarget(TriggerTarget.LOCAL_MUSIC) },
+            )
+            TriggerTargetOption(
+                label = "打开哔哩哔哩视频",
+                selected = state.triggerTarget == TriggerTarget.BILIBILI_VIDEO,
+                enabled = !state.monitoring,
+                onClick = { vm.setTriggerTarget(TriggerTarget.BILIBILI_VIDEO) },
+            )
+            if (state.triggerTarget == TriggerTarget.LOCAL_MUSIC) {
+                Text("音乐：${state.musicName}")
+                Button(
+                    onClick = { musicLauncher.launch(arrayOf("audio/*")) },
+                    enabled = !state.monitoring,
+                ) { Text("选择本地音乐") }
+            } else {
+                OutlinedTextField(
+                    value = state.bilibiliBvid,
+                    onValueChange = vm::setBilibiliBvid,
+                    label = { Text("BV 号或完整视频链接") },
+                    singleLine = true,
+                    enabled = !state.monitoring,
+                    isError = state.bilibiliBvid.isNotBlank() &&
+                        BilibiliVideo.normalizeBvid(state.bilibiliBvid) == null,
+                    modifier = Modifier.fillMaxWidth(),
+                )
+                Text("后台或锁屏触发时，请点击通知打开视频；恢复后不会关闭 B 站。")
+                Button(
+                    onClick = vm::testBilibiliVideo,
+                    enabled = !state.monitoring && BilibiliVideo.normalizeBvid(state.bilibiliBvid) != null,
+                ) { Text("测试打开视频") }
+            }
             Button(onClick = {
                 val permissions = missingMonitoringPermissions(context)
                 if (!state.demoMode && permissions.isNotEmpty()) {
@@ -134,6 +169,22 @@ private fun RainLoveScreen(vm: RainLoveViewModel) {
             }
             Text("娱乐项目，不用于诊断或监测疾病。", style = MaterialTheme.typography.bodySmall)
         }
+    }
+}
+
+@Composable
+private fun TriggerTargetOption(
+    label: String,
+    selected: Boolean,
+    enabled: Boolean,
+    onClick: () -> Unit,
+) {
+    Row(
+        Modifier.fillMaxWidth(),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        RadioButton(selected = selected, onClick = onClick, enabled = enabled)
+        Text(label)
     }
 }
 

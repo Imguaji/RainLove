@@ -11,6 +11,8 @@ import android.os.IBinder
 import android.os.SystemClock
 import androidx.core.app.NotificationCompat
 import com.rainlove.app.media.MusicPlayer
+import com.rainlove.app.media.BilibiliVideo
+import com.rainlove.app.media.TriggerTarget
 import com.rainlove.app.sensor.BleHeartRateDevice
 import com.rainlove.app.sensor.BleHeartRateSource
 import com.rainlove.app.sensor.HeartRateSource
@@ -21,6 +23,8 @@ class HeartRateForegroundService : Service(), HeartRateSource.Listener {
     private lateinit var musicPlayer: MusicPlayer
     private var heartRateSource: BleHeartRateSource? = null
     private var engine = HeartRateTriggerEngine()
+    private var triggerTarget = TriggerTarget.LOCAL_MUSIC
+    private var bilibiliBvid = ""
 
     override fun onCreate() {
         super.onCreate()
@@ -76,17 +80,26 @@ class HeartRateForegroundService : Service(), HeartRateSource.Listener {
         preferences.getString(RainLovePreferences.MUSIC_URI, null)?.let {
             musicPlayer.select(android.net.Uri.parse(it))
         }
+        triggerTarget = preferences.getString(RainLovePreferences.TRIGGER_TARGET, null)
+            ?.let { runCatching { TriggerTarget.valueOf(it) }.getOrNull() }
+            ?: TriggerTarget.LOCAL_MUSIC
+        bilibiliBvid = preferences.getString(RainLovePreferences.BILIBILI_BVID, "") ?: ""
     }
 
     override fun onHeartRate(bpm: Int) {
         if (!isRunning) return
         when (engine.onHeartRate(bpm, SystemClock.elapsedRealtime())) {
             HeartRateTriggerEngine.Event.StartPlayback -> {
-                if (musicPlayer.play()) onStatus("达到触发条件，正在播放")
-                else onStatus("已触发，但尚未选择音乐")
+                when (triggerTarget) {
+                    TriggerTarget.LOCAL_MUSIC -> {
+                        if (musicPlayer.play()) onStatus("达到触发条件，正在播放")
+                        else onStatus("已触发，但尚未选择音乐")
+                    }
+                    TriggerTarget.BILIBILI_VIDEO -> notifyBilibiliTrigger()
+                }
             }
             HeartRateTriggerEngine.Event.StopPlayback -> {
-                musicPlayer.pause()
+                if (triggerTarget == TriggerTarget.LOCAL_MUSIC) musicPlayer.pause()
                 onStatus("心率已恢复，进入冷却")
             }
             null -> Unit
@@ -142,6 +155,40 @@ class HeartRateForegroundService : Service(), HeartRateSource.Listener {
             NotificationManager.IMPORTANCE_LOW,
         ).apply { description = "RainLove 后台心率连接状态" }
         getSystemService(NotificationManager::class.java).createNotificationChannel(channel)
+        val triggerChannel = NotificationChannel(
+            TRIGGER_NOTIFICATION_CHANNEL_ID,
+            "心动触发提醒",
+            NotificationManager.IMPORTANCE_HIGH,
+        ).apply { description = "心率达到条件后的播放提醒" }
+        getSystemService(NotificationManager::class.java).createNotificationChannel(triggerChannel)
+    }
+
+    private fun notifyBilibiliTrigger() {
+        val bvid = BilibiliVideo.normalizeBvid(bilibiliBvid)
+        val uri = BilibiliVideo.urlFor(bilibiliBvid)
+        if (bvid == null || uri == null) {
+            onStatus("已触发，但 BV 号无效")
+            return
+        }
+        val openVideo = PendingIntent.getActivity(
+            this,
+            2,
+            Intent(Intent.ACTION_VIEW, uri).apply {
+                addCategory(Intent.CATEGORY_BROWSABLE)
+            },
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
+        )
+        val notification = NotificationCompat.Builder(this, TRIGGER_NOTIFICATION_CHANNEL_ID)
+            .setSmallIcon(android.R.drawable.ic_media_play)
+            .setContentTitle("心率已达到触发条件")
+            .setContentText("点击打开哔哩哔哩视频 $bvid")
+            .setContentIntent(openVideo)
+            .setAutoCancel(true)
+            .setPriority(NotificationCompat.PRIORITY_HIGH)
+            .addAction(android.R.drawable.ic_media_play, "打开视频", openVideo)
+            .build()
+        getSystemService(NotificationManager::class.java).notify(TRIGGER_NOTIFICATION_ID, notification)
+        onStatus("达到触发条件，请点击通知打开 B 站视频")
     }
 
     private fun buildNotification(content: String): Notification {
@@ -202,6 +249,8 @@ class HeartRateForegroundService : Service(), HeartRateSource.Listener {
         const val EXTRA_DEVICE_ADDRESS = "device_address"
         const val EXTRA_DEVICE_NAME = "device_name"
         private const val NOTIFICATION_CHANNEL_ID = "heart_rate_monitoring"
+        private const val TRIGGER_NOTIFICATION_CHANNEL_ID = "heart_rate_trigger"
         private const val NOTIFICATION_ID = 1001
+        private const val TRIGGER_NOTIFICATION_ID = 1002
     }
 }

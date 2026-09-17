@@ -12,6 +12,8 @@ import android.provider.OpenableColumns
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.AndroidViewModel
 import com.rainlove.app.media.MusicPlayer
+import com.rainlove.app.media.BilibiliVideo
+import com.rainlove.app.media.TriggerTarget
 import com.rainlove.app.sensor.BleHeartRateDevice
 import com.rainlove.app.sensor.BleHeartRateScanner
 import com.rainlove.app.sensor.mergeHeartRateDevices
@@ -29,6 +31,8 @@ data class RainLoveUiState(
     val recoverySeconds: Int = 10,
     val cooldownSeconds: Int = 60,
     val musicName: String = "尚未选择音乐",
+    val triggerTarget: TriggerTarget = TriggerTarget.LOCAL_MUSIC,
+    val bilibiliBvid: String = "",
     val demoMode: Boolean = true,
     val monitoring: Boolean = false,
     val scanningDevices: Boolean = false,
@@ -104,6 +108,12 @@ class RainLoveViewModel(application: Application) : AndroidViewModel(application
 
     private fun start() {
         stopDeviceScan()
+        if (_ui.value.triggerTarget == TriggerTarget.BILIBILI_VIDEO &&
+            BilibiliVideo.normalizeBvid(_ui.value.bilibiliBvid) == null
+        ) {
+            _ui.value = _ui.value.copy(status = "请输入有效的 BV 号")
+            return
+        }
         rebuildEngine()
         if (_ui.value.demoMode) {
             _ui.value = _ui.value.copy(monitoring = true, status = "Demo 模式运行中")
@@ -245,14 +255,48 @@ class RainLoveViewModel(application: Application) : AndroidViewModel(application
             .apply()
     }
 
+    fun setTriggerTarget(target: TriggerTarget) {
+        if (_ui.value.monitoring) return
+        _ui.value = _ui.value.copy(triggerTarget = target)
+        preferences.edit().putString(RainLovePreferences.TRIGGER_TARGET, target.name).apply()
+    }
+
+    fun setBilibiliBvid(value: String) {
+        if (_ui.value.monitoring) return
+        _ui.value = _ui.value.copy(bilibiliBvid = value)
+        preferences.edit().putString(RainLovePreferences.BILIBILI_BVID, value).apply()
+    }
+
+    fun testBilibiliVideo() {
+        val bvid = BilibiliVideo.normalizeBvid(_ui.value.bilibiliBvid)
+        _ui.value = _ui.value.copy(
+            status = when {
+                bvid == null -> "请输入有效的 BV 号"
+                BilibiliVideo.open(getApplication(), bvid) -> "已打开 $bvid"
+                else -> "无法打开视频链接"
+            }
+        )
+    }
+
     private fun handleDemoHeartRate(bpm: Int) {
         when (engine.onHeartRate(bpm, SystemClock.elapsedRealtime())) {
             HeartRateTriggerEngine.Event.StartPlayback -> {
-                val status = if (musicPlayer.play()) "达到触发条件，正在播放" else "已触发，但尚未选择音乐"
+                val status = when (_ui.value.triggerTarget) {
+                    TriggerTarget.LOCAL_MUSIC -> {
+                        if (musicPlayer.play()) "达到触发条件，正在播放" else "已触发，但尚未选择音乐"
+                    }
+                    TriggerTarget.BILIBILI_VIDEO -> {
+                        if (BilibiliVideo.open(getApplication(), _ui.value.bilibiliBvid)) {
+                            "达到触发条件，已打开 B 站视频"
+                        } else {
+                            "已触发，但无法打开 B 站视频"
+                        }
+                    }
+                }
                 _ui.value = _ui.value.copy(status = status)
             }
             HeartRateTriggerEngine.Event.StopPlayback -> {
-                musicPlayer.pause()
+                if (_ui.value.triggerTarget == TriggerTarget.LOCAL_MUSIC) musicPlayer.pause()
                 _ui.value = _ui.value.copy(status = "心率已恢复，进入冷却")
             }
             null -> Unit
@@ -273,6 +317,10 @@ class RainLoveViewModel(application: Application) : AndroidViewModel(application
             recoverySeconds = preferences.getInt(RainLovePreferences.RECOVERY_SECONDS, 10).coerceIn(1, 30),
             cooldownSeconds = preferences.getInt(RainLovePreferences.COOLDOWN_SECONDS, 60).coerceIn(0, 300),
             musicName = preferences.getString(RainLovePreferences.MUSIC_NAME, null) ?: "尚未选择音乐",
+            triggerTarget = preferences.getString(RainLovePreferences.TRIGGER_TARGET, null)
+                ?.let { runCatching { TriggerTarget.valueOf(it) }.getOrNull() }
+                ?: TriggerTarget.LOCAL_MUSIC,
+            bilibiliBvid = preferences.getString(RainLovePreferences.BILIBILI_BVID, "") ?: "",
             demoMode = preferences.getBoolean(RainLovePreferences.DEMO_MODE, true),
             selectedDeviceAddress = preferences.getString(RainLovePreferences.DEVICE_ADDRESS, null),
             selectedDeviceName = preferences.getString(RainLovePreferences.DEVICE_NAME, null),
