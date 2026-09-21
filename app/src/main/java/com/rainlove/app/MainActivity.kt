@@ -47,6 +47,16 @@ class MainActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         setContent { MaterialTheme { RainLoveScreen(viewModel) } }
     }
+
+    override fun onStart() {
+        super.onStart()
+        HeartRateForegroundService.setAppVisible(true)
+    }
+
+    override fun onStop() {
+        HeartRateForegroundService.setAppVisible(false)
+        super.onStop()
+    }
 }
 
 @Composable
@@ -168,7 +178,7 @@ private fun RainLoveScreen(vm: RainLoveViewModel) {
                         enabled = !state.monitoring,
                     )
                 }
-                Text("后台或锁屏触发时，请点击通知打开视频；恢复后不会关闭 B 站。")
+                Text("RainLove 在前台时会直接打开视频；后台或锁屏受 Android 限制，仍需点击通知。恢复后不会关闭 B 站。")
                 Button(
                     onClick = vm::testBilibiliVideo,
                     enabled = !state.monitoring && BilibiliVideo.normalizeBvid(state.bilibiliBvid) != null,

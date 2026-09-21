@@ -233,6 +233,11 @@ class HeartRateForegroundService : Service(), HeartRateSource.Listener {
             onStatus("已触发，但 BV 号无效")
             return
         }
+        if (isAppVisible && BilibiliVideo.open(this, bvid, bilibiliAutoPlay)) {
+            getSystemService(NotificationManager::class.java).cancel(TRIGGER_NOTIFICATION_ID)
+            onStatus("达到触发条件，正在打开 B 站视频…")
+            return
+        }
         val openVideo = PendingIntent.getActivity(
             this,
             2,
@@ -252,7 +257,7 @@ class HeartRateForegroundService : Service(), HeartRateSource.Listener {
             .addAction(android.R.drawable.ic_media_play, "打开视频", openVideo)
             .build()
         getSystemService(NotificationManager::class.java).notify(TRIGGER_NOTIFICATION_ID, notification)
-        onStatus("达到触发条件，请点击通知打开 B 站视频")
+        onStatus("达到触发条件；应用在后台，请点击通知打开 B 站视频")
     }
 
     private fun buildNotification(content: String): Notification {
@@ -302,6 +307,13 @@ class HeartRateForegroundService : Service(), HeartRateSource.Listener {
         @Volatile
         var currentStatus: String = "等待启动"
             private set
+
+        @Volatile
+        private var isAppVisible: Boolean = false
+
+        fun setAppVisible(visible: Boolean) {
+            isAppVisible = visible
+        }
 
         const val ACTION_START = "com.rainlove.app.action.START_MONITORING"
         const val ACTION_STOP = "com.rainlove.app.action.STOP_MONITORING"
