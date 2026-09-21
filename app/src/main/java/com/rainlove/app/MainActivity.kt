@@ -1,9 +1,12 @@
 package com.rainlove.app
 
 import android.Manifest
+import android.content.Intent
 import android.content.pm.PackageManager
+import android.net.Uri
 import android.os.Build
 import android.os.Bundle
+import android.provider.Settings
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
@@ -51,6 +54,7 @@ class MainActivity : ComponentActivity() {
     override fun onStart() {
         super.onStart()
         HeartRateForegroundService.setAppVisible(true)
+        viewModel.reconcileBilibiliBackgroundDirectPermission(Settings.canDrawOverlays(this))
     }
 
     override fun onStop() {
@@ -76,6 +80,9 @@ private fun RainLoveScreen(vm: RainLoveViewModel) {
         uri ?: return@rememberLauncherForActivityResult
         context.contentResolver.takePersistableUriPermission(uri, android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION)
         vm.selectMusic(uri)
+    }
+    val overlayPermissionLauncher = rememberLauncherForActivityResult(ActivityResultContracts.StartActivityForResult()) {
+        vm.setBilibiliBackgroundDirect(Settings.canDrawOverlays(context))
     }
 
     Scaffold { padding ->
@@ -178,7 +185,37 @@ private fun RainLoveScreen(vm: RainLoveViewModel) {
                         enabled = !state.monitoring,
                     )
                 }
-                Text("RainLove 在前台时会直接打开视频；后台或锁屏受 Android 限制，仍需点击通知。恢复后不会关闭 B 站。")
+                Row(
+                    Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Text("后台直接打开")
+                    Switch(
+                        checked = state.bilibiliBackgroundDirect,
+                        onCheckedChange = { enabled ->
+                            when {
+                                !enabled -> vm.setBilibiliBackgroundDirect(false)
+                                Settings.canDrawOverlays(context) -> vm.setBilibiliBackgroundDirect(true)
+                                else -> overlayPermissionLauncher.launch(
+                                    Intent(
+                                        Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
+                                        Uri.parse("package:${context.packageName}"),
+                                    )
+                                )
+                            }
+                        },
+                        enabled = !state.monitoring,
+                    )
+                }
+                Text("开启后需授予“显示在其他应用上层”权限；RainLove 不会显示悬浮窗，只用该权限请求后台直接跳转。")
+                Text(
+                    if (state.bilibiliBackgroundDirect) {
+                        "RainLove 在前台或后台触发时都会尝试直接打开视频；权限失效时自动降级为通知。"
+                    } else {
+                        "RainLove 在前台时直接打开视频；后台受 Android 限制，需点击通知。"
+                    }
+                )
                 Button(
                     onClick = vm::testBilibiliVideo,
                     enabled = !state.monitoring && BilibiliVideo.normalizeBvid(state.bilibiliBvid) != null,

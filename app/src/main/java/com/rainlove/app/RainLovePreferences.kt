@@ -13,6 +13,7 @@ internal object RainLovePreferences {
     const val TRIGGER_TARGET = "trigger_target"
     const val BILIBILI_BVID = "bilibili_bvid"
     const val BILIBILI_AUTO_PLAY = "bilibili_auto_play"
+    const val BILIBILI_BACKGROUND_DIRECT = "bilibili_background_direct"
     const val DEVICE_ADDRESS = "device_address"
     const val DEVICE_NAME = "device_name"
 }

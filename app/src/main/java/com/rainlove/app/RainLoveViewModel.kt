@@ -37,6 +37,7 @@ data class RainLoveUiState(
     val triggerTarget: TriggerTarget = TriggerTarget.LOCAL_MUSIC,
     val bilibiliBvid: String = "",
     val bilibiliAutoPlay: Boolean = true,
+    val bilibiliBackgroundDirect: Boolean = false,
     val demoMode: Boolean = true,
     val monitoring: Boolean = false,
     val scanningDevices: Boolean = false,
@@ -305,6 +306,22 @@ class RainLoveViewModel(application: Application) : AndroidViewModel(application
         preferences.edit().putBoolean(RainLovePreferences.BILIBILI_AUTO_PLAY, enabled).apply()
     }
 
+    fun setBilibiliBackgroundDirect(enabled: Boolean) {
+        if (_ui.value.monitoring) return
+        _ui.value = _ui.value.copy(
+            bilibiliBackgroundDirect = enabled,
+            status = if (enabled) "已允许后台直接打开 B 站" else _ui.value.status,
+        )
+        preferences.edit().putBoolean(RainLovePreferences.BILIBILI_BACKGROUND_DIRECT, enabled).apply()
+    }
+
+    fun reconcileBilibiliBackgroundDirectPermission(permissionGranted: Boolean) {
+        if (_ui.value.bilibiliBackgroundDirect && !permissionGranted) {
+            _ui.value = _ui.value.copy(bilibiliBackgroundDirect = false)
+            preferences.edit().putBoolean(RainLovePreferences.BILIBILI_BACKGROUND_DIRECT, false).apply()
+        }
+    }
+
     fun testBilibiliVideo() {
         val bvid = BilibiliVideo.normalizeBvid(_ui.value.bilibiliBvid)
         _ui.value = _ui.value.copy(
@@ -379,6 +396,10 @@ class RainLoveViewModel(application: Application) : AndroidViewModel(application
                 ?: TriggerTarget.LOCAL_MUSIC,
             bilibiliBvid = preferences.getString(RainLovePreferences.BILIBILI_BVID, "") ?: "",
             bilibiliAutoPlay = preferences.getBoolean(RainLovePreferences.BILIBILI_AUTO_PLAY, true),
+            bilibiliBackgroundDirect = preferences.getBoolean(
+                RainLovePreferences.BILIBILI_BACKGROUND_DIRECT,
+                false,
+            ),
             demoMode = preferences.getBoolean(RainLovePreferences.DEMO_MODE, true),
             selectedDeviceAddress = preferences.getString(RainLovePreferences.DEVICE_ADDRESS, null),
             selectedDeviceName = preferences.getString(RainLovePreferences.DEVICE_NAME, null),

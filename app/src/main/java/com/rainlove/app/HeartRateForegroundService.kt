@@ -11,6 +11,7 @@ import android.os.Handler
 import android.os.IBinder
 import android.os.Looper
 import android.os.SystemClock
+import android.provider.Settings
 import androidx.core.app.NotificationCompat
 import com.rainlove.app.media.MusicPlayer
 import com.rainlove.app.media.BilibiliVideo
@@ -28,6 +29,7 @@ class HeartRateForegroundService : Service(), HeartRateSource.Listener {
     private var triggerTarget = TriggerTarget.LOCAL_MUSIC
     private var bilibiliBvid = ""
     private var bilibiliAutoPlay = true
+    private var bilibiliBackgroundDirect = false
     private val mainHandler = Handler(Looper.getMainLooper())
     private var lastHeartRateBpm: Int? = null
     private val stateAdvanceRunnable = Runnable { lastHeartRateBpm?.let(::processHeartRate) }
@@ -92,6 +94,10 @@ class HeartRateForegroundService : Service(), HeartRateSource.Listener {
             ?: TriggerTarget.LOCAL_MUSIC
         bilibiliBvid = preferences.getString(RainLovePreferences.BILIBILI_BVID, "") ?: ""
         bilibiliAutoPlay = preferences.getBoolean(RainLovePreferences.BILIBILI_AUTO_PLAY, true)
+        bilibiliBackgroundDirect = preferences.getBoolean(
+            RainLovePreferences.BILIBILI_BACKGROUND_DIRECT,
+            false,
+        )
     }
 
     override fun onHeartRate(bpm: Int) {
@@ -233,7 +239,9 @@ class HeartRateForegroundService : Service(), HeartRateSource.Listener {
             onStatus("已触发，但 BV 号无效")
             return
         }
-        if (isAppVisible && BilibiliVideo.open(this, bvid, bilibiliAutoPlay)) {
+        val canOpenDirectly = isAppVisible ||
+            (bilibiliBackgroundDirect && Settings.canDrawOverlays(this))
+        if (canOpenDirectly && BilibiliVideo.open(this, bvid, bilibiliAutoPlay)) {
             getSystemService(NotificationManager::class.java).cancel(TRIGGER_NOTIFICATION_ID)
             onStatus("达到触发条件，正在打开 B 站视频…")
             return
