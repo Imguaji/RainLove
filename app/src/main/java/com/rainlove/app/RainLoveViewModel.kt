@@ -18,6 +18,7 @@ import com.rainlove.app.media.BilibiliVideo
 import com.rainlove.app.media.TriggerTarget
 import com.rainlove.app.sensor.BleHeartRateDevice
 import com.rainlove.app.sensor.BleHeartRateScanner
+import com.rainlove.app.sensor.HeartRateTransport
 import com.rainlove.app.sensor.mergeHeartRateDevices
 import com.rainlove.app.trigger.HeartRateTriggerEngine
 import com.rainlove.app.trigger.TriggerConfig
@@ -39,6 +40,7 @@ data class RainLoveUiState(
     val bilibiliAutoPlay: Boolean = true,
     val bilibiliBackgroundDirect: Boolean = false,
     val demoMode: Boolean = true,
+    val heartRateTransport: HeartRateTransport = HeartRateTransport.BLE,
     val monitoring: Boolean = false,
     val scanningDevices: Boolean = false,
     val availableDevices: List<BleHeartRateDevice> = emptyList(),
@@ -170,8 +172,25 @@ class RainLoveViewModel(application: Application) : AndroidViewModel(application
         if (_ui.value.monitoring && _ui.value.demoMode) handleDemoHeartRate(value)
     }
 
+    fun setHeartRateTransport(transport: HeartRateTransport) {
+        if (_ui.value.monitoring) return
+        stopDeviceScan()
+        _ui.value = _ui.value.copy(
+            heartRateTransport = transport,
+            status = when (transport) {
+                HeartRateTransport.BLE -> "已选择 Bluetooth LE 心率"
+                HeartRateTransport.ANT_PLUS -> "已选择 ANT+ 心率，将自动连接第一个可用设备"
+            },
+        )
+        preferences.edit()
+            .putString(RainLovePreferences.HEART_RATE_TRANSPORT, transport.name)
+            .apply()
+    }
+
     fun scanForDevices() {
-        if (_ui.value.monitoring || _ui.value.demoMode) return
+        if (_ui.value.monitoring || _ui.value.demoMode ||
+            _ui.value.heartRateTransport != HeartRateTransport.BLE
+        ) return
         val scanner = bluetoothManager?.adapter?.bluetoothLeScanner
         if (scanner == null) {
             _ui.value = _ui.value.copy(status = "蓝牙不可用")
@@ -401,6 +420,9 @@ class RainLoveViewModel(application: Application) : AndroidViewModel(application
                 false,
             ),
             demoMode = preferences.getBoolean(RainLovePreferences.DEMO_MODE, true),
+            heartRateTransport = preferences.getString(RainLovePreferences.HEART_RATE_TRANSPORT, null)
+                ?.let { runCatching { HeartRateTransport.valueOf(it) }.getOrNull() }
+                ?: HeartRateTransport.BLE,
             selectedDeviceAddress = preferences.getString(RainLovePreferences.DEVICE_ADDRESS, null),
             selectedDeviceName = preferences.getString(RainLovePreferences.DEVICE_NAME, null),
         )

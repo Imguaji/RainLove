@@ -18,13 +18,16 @@ import com.rainlove.app.media.BilibiliVideo
 import com.rainlove.app.media.TriggerTarget
 import com.rainlove.app.sensor.BleHeartRateDevice
 import com.rainlove.app.sensor.BleHeartRateSource
+import com.rainlove.app.sensor.AntPlusHeartRateSource
 import com.rainlove.app.sensor.HeartRateSource
+import com.rainlove.app.sensor.HeartRateTransport
 import com.rainlove.app.trigger.HeartRateTriggerEngine
 import com.rainlove.app.trigger.TriggerConfig
 
 class HeartRateForegroundService : Service(), HeartRateSource.Listener {
     private lateinit var musicPlayer: MusicPlayer
-    private var heartRateSource: BleHeartRateSource? = null
+    private var heartRateSource: HeartRateSource? = null
+    private var heartRateTransport = HeartRateTransport.BLE
     private var engine = HeartRateTriggerEngine()
     private var triggerTarget = TriggerTarget.LOCAL_MUSIC
     private var bilibiliBvid = ""
@@ -52,26 +55,31 @@ class HeartRateForegroundService : Service(), HeartRateSource.Listener {
 
     private fun startMonitoring() {
         if (heartRateSource != null) return
-        val scanner = getSystemService(BluetoothManager::class.java)?.adapter?.bluetoothLeScanner
-        if (scanner == null) {
-            startForeground(NOTIFICATION_ID, buildNotification("蓝牙不可用"))
-            onError("蓝牙不可用")
-            return
-        }
-
         loadSessionSettings()
         lastHeartRateBpm = null
         isRunning = true
         currentStatus = "正在启动心率监测…"
         startForeground(NOTIFICATION_ID, buildNotification("正在启动心率监测…"))
-        broadcastState(monitoring = true, status = "准备扫描")
+        broadcastState(monitoring = true, status = "准备连接")
         val preferences = getSharedPreferences(RainLovePreferences.NAME, MODE_PRIVATE)
-        heartRateSource = BleHeartRateSource(
-            context = this,
-            scanner = scanner,
-            targetAddress = preferences.getString(RainLovePreferences.DEVICE_ADDRESS, null),
-            onConnectedDevice = ::rememberConnectedDevice,
-        ).also { it.start(this) }
+        heartRateSource = when (heartRateTransport) {
+            HeartRateTransport.BLE -> {
+                val scanner = getSystemService(BluetoothManager::class.java)
+                    ?.adapter
+                    ?.bluetoothLeScanner
+                if (scanner == null) {
+                    onError("蓝牙不可用")
+                    return
+                }
+                BleHeartRateSource(
+                    context = this,
+                    scanner = scanner,
+                    targetAddress = preferences.getString(RainLovePreferences.DEVICE_ADDRESS, null),
+                    onConnectedDevice = ::rememberConnectedDevice,
+                )
+            }
+            HeartRateTransport.ANT_PLUS -> AntPlusHeartRateSource(this)
+        }.also { it.start(this) }
     }
 
     private fun loadSessionSettings() {
@@ -98,6 +106,9 @@ class HeartRateForegroundService : Service(), HeartRateSource.Listener {
             RainLovePreferences.BILIBILI_BACKGROUND_DIRECT,
             false,
         )
+        heartRateTransport = preferences.getString(RainLovePreferences.HEART_RATE_TRANSPORT, null)
+            ?.let { runCatching { HeartRateTransport.valueOf(it) }.getOrNull() }
+            ?: HeartRateTransport.BLE
     }
 
     override fun onHeartRate(bpm: Int) {

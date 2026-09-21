@@ -7,6 +7,7 @@
 ## 当前功能
 
 - 标准 BLE Heart Rate Service（UUID `0x180D`）扫描与实时 BPM 读取
+- 可切换 ANT+ 心率数据源，自动搜索、断线重连，并检查所需的 ANT+ 系统服务
 - 扫描并手动选择兼容心率设备，记住上次连接设备
 - BLE 意外断开后自动重连
 - 前台服务持续监测，切到后台或锁屏后仍可触发音乐
@@ -27,6 +28,8 @@
 2. 长按 `MENU`，进入“心率选项”。
 3. 开启“广播心率”。
 4. 在 RainLove 关闭 Demo 模式，授权附近设备权限并开启心动模式。
+
+也可以在关闭 Demo 模式后选择 `ANT+`。手机需要 ANT+ 硬件或兼容的 ANT USB 适配器，并安装 ANT Radio Service 与 ANT+ Plugins Service；RainLove 会自动连接第一个可用的 ANT+ 心率设备。没有 ANT+ 环境时请继续使用默认的 Bluetooth LE。
 
 ## 本地运行
 
@@ -53,7 +56,7 @@
 - [x] 持久化触发时长、恢复时长与冷却时间设置
 - [x] 前台服务与锁屏后台运行
 - [x] 记住上次连接的心率设备
-- [ ] ANT+ Heart Rate 数据源
+- [x] ANT+ Heart Rate 数据源
 - [x] 设备选择界面和断线重连
 
 ## 隐私与版权
@@ -63,3 +66,5 @@
 ## License
 
 [MIT](LICENSE)
+
+项目包含的 ANT+ PluginLib 使用 ANT+ Shared Source License，详情见 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)。
