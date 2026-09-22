@@ -24,6 +24,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Button
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.RadioButton
@@ -31,6 +32,7 @@ import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Slider
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
@@ -80,6 +82,7 @@ private fun RainLoveScreen(vm: RainLoveViewModel) {
     var pendingBluetoothAction by remember { mutableStateOf(BluetoothAction.NONE) }
     var showHistory by remember { mutableStateOf(false) }
     var profileName by remember { mutableStateOf("") }
+    var pendingDeleteProfile by remember { mutableStateOf<String?>(null) }
     val permissionLauncher = rememberLauncherForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) {
         when (pendingBluetoothAction) {
             BluetoothAction.SCAN -> if (missingBluetoothPermissions(context).isEmpty()) vm.scanForDevices()
@@ -100,6 +103,24 @@ private fun RainLoveScreen(vm: RainLoveViewModel) {
     }
     val overlayPermissionLauncher = rememberLauncherForActivityResult(ActivityResultContracts.StartActivityForResult()) {
         vm.setExternalBackgroundDirect(Settings.canDrawOverlays(context))
+    }
+
+    pendingDeleteProfile?.let { name ->
+        AlertDialog(
+            onDismissRequest = { pendingDeleteProfile = null },
+            title = { Text("删除触发方案？") },
+            text = { Text("将永久删除“$name”方案；当前设置不会改变。") },
+            confirmButton = {
+                TextButton(onClick = {
+                    vm.deleteProfile(name)
+                    if (profileName == name) profileName = ""
+                    pendingDeleteProfile = null
+                }) { Text("删除") }
+            },
+            dismissButton = {
+                TextButton(onClick = { pendingDeleteProfile = null }) { Text("取消") }
+            },
+        )
     }
 
     Scaffold { padding ->
@@ -404,11 +425,19 @@ private fun RainLoveScreen(vm: RainLoveViewModel) {
                 enabled = !state.monitoring && TriggerProfileStore.normalizeName(profileName) != null,
             ) { Text("保存/覆盖当前方案") }
             state.profileNames.forEach { name ->
-                Button(onClick = {
-                    vm.loadProfile(name)
-                    profileName = name
-                }, enabled = !state.monitoring) {
-                    Text("切换到 $name")
+                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Button(
+                        onClick = {
+                            vm.loadProfile(name)
+                            profileName = name
+                        },
+                        enabled = !state.monitoring,
+                        modifier = Modifier.weight(1f),
+                    ) { Text("切换到 $name") }
+                    TextButton(
+                        onClick = { pendingDeleteProfile = name },
+                        enabled = !state.monitoring,
+                    ) { Text("删除") }
                 }
             }
             Text("娱乐项目，不用于诊断或监测疾病。", style = MaterialTheme.typography.bodySmall)

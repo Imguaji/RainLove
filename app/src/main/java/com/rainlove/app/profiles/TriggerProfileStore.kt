@@ -94,7 +94,26 @@ class TriggerProfileStore(private val preferences: SharedPreferences) {
         )
     }
 
+    fun delete(rawName: String): Boolean {
+        val name = normalizeName(rawName) ?: return false
+        val remaining = names().toMutableSet()
+        if (!remaining.remove(name)) return false
+        preferences.edit().apply {
+            PROFILE_FIELDS.forEach { remove(key(name, it)) }
+            putStringSet(RainLovePreferences.PROFILE_NAMES, remaining)
+            apply()
+        }
+        return true
+    }
+
     companion object {
+        private val PROFILE_FIELDS = listOf(
+            "triggerBpm", "recoveryBpm", "triggerSeconds", "recoverySeconds", "cooldownSeconds",
+            "demoMode", "transport", "deviceAddress", "deviceName", "triggerTarget", "musicUri",
+            "musicName", "bilibiliBvid", "bilibiliAutoPlay", "neteaseSongId", "neteaseAutoPlay",
+            "externalLink", "externalPackage", "externalAutoPlay", "externalBackgroundDirect",
+        )
+
         fun normalizeName(value: String): String? = value.trim().takeIf {
             it.isNotEmpty() && it.length <= 30 && it.none(Char::isISOControl)
         }

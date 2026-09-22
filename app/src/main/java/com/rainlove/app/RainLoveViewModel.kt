@@ -297,6 +297,16 @@ class RainLoveViewModel(application: Application) : AndroidViewModel(application
         rebuildEngine()
     }
 
+    fun deleteProfile(name: String) {
+        if (_ui.value.monitoring) return
+        if (profileStore.delete(name)) {
+            _ui.value = _ui.value.copy(
+                profileNames = profileStore.names(),
+                status = "已删除方案：$name；当前设置保持不变",
+            )
+        }
+    }
+
     fun setDemoBpm(value: Int) {
         _ui.value = _ui.value.copy(bpm = value)
         if (_ui.value.monitoring && _ui.value.demoMode) handleDemoHeartRate(value)

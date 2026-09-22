@@ -4,7 +4,9 @@ import android.content.SharedPreferences
 import com.rainlove.app.media.TriggerTarget
 import com.rainlove.app.sensor.HeartRateTransport
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
+import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class TriggerProfileStoreTest {
@@ -22,7 +24,8 @@ class TriggerProfileStoreTest {
 
     @Test
     fun savesAndRestoresProfilesIndependently() {
-        val store = TriggerProfileStore(MemoryPreferences())
+        val preferences = MemoryPreferences()
+        val store = TriggerProfileStore(preferences)
         val riding = sampleProfile()
         val daily = riding.copy(
             triggerBpm = 130,
@@ -46,6 +49,13 @@ class TriggerProfileStoreTest {
         store.save("骑行", updated)
         assertEquals(updated, store.load("骑行"))
         assertEquals(daily, store.load("日常"))
+
+        assertTrue(store.delete("骑行"))
+        assertFalse(store.delete("骑行"))
+        assertNull(store.load("骑行"))
+        assertEquals(listOf("日常"), store.names())
+        assertEquals(daily, store.load("日常"))
+        assertFalse(preferences.all.keys.any { it.startsWith("profile.骑行.") })
     }
 
     private fun sampleProfile() = TriggerProfile(
