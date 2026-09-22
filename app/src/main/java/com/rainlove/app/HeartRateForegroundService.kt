@@ -12,7 +12,9 @@ import android.os.IBinder
 import android.os.Looper
 import android.os.SystemClock
 import android.provider.Settings
+import android.util.Log
 import androidx.core.app.NotificationCompat
+import com.rainlove.app.history.HeartRateHistory
 import com.rainlove.app.media.MusicPlayer
 import com.rainlove.app.media.BilibiliVideo
 import com.rainlove.app.media.NeteaseMusic
@@ -25,9 +27,13 @@ import com.rainlove.app.sensor.HeartRateSource
 import com.rainlove.app.sensor.HeartRateTransport
 import com.rainlove.app.trigger.HeartRateTriggerEngine
 import com.rainlove.app.trigger.TriggerConfig
+import java.util.concurrent.Executors
 
 class HeartRateForegroundService : Service(), HeartRateSource.Listener {
     private lateinit var musicPlayer: MusicPlayer
+    private lateinit var history: HeartRateHistory
+    private val historyExecutor = Executors.newSingleThreadExecutor()
+    private var lastHistorySampleElapsedMs = 0L
     private var heartRateSource: HeartRateSource? = null
     private var heartRateTransport = HeartRateTransport.BLE
     private var engine = HeartRateTriggerEngine()
@@ -47,6 +53,7 @@ class HeartRateForegroundService : Service(), HeartRateSource.Listener {
     override fun onCreate() {
         super.onCreate()
         musicPlayer = MusicPlayer(this, ::onMusicEvent)
+        history = HeartRateHistory(this)
         createNotificationChannel()
     }
 
@@ -64,6 +71,7 @@ class HeartRateForegroundService : Service(), HeartRateSource.Listener {
         if (heartRateSource != null) return
         loadSessionSettings()
         lastHeartRateBpm = null
+        lastHistorySampleElapsedMs = 0L
         isRunning = true
         currentStatus = "正在启动心率监测…"
         startForeground(NOTIFICATION_ID, buildNotification("正在启动心率监测…"))
@@ -134,6 +142,16 @@ class HeartRateForegroundService : Service(), HeartRateSource.Listener {
         }
         if (!isRunning) return
         lastHeartRateBpm = bpm
+        val nowMs = SystemClock.elapsedRealtime()
+        if (lastHistorySampleElapsedMs == 0L || nowMs - lastHistorySampleElapsedMs >= 1_000L) {
+            lastHistorySampleElapsedMs = nowMs
+            val timestampMs = System.currentTimeMillis()
+            val source = heartRateTransport.name
+            historyExecutor.execute {
+                runCatching { history.record(timestampMs, bpm, source) }
+                    .onFailure { Log.w("RainLoveHistory", "Failed to store heart rate sample", it) }
+            }
+        }
         processHeartRate(bpm)
     }
 
@@ -246,6 +264,7 @@ class HeartRateForegroundService : Service(), HeartRateSource.Listener {
         heartRateSource = null
         source?.stop()
         musicPlayer.release()
+        historyExecutor.shutdown()
         super.onDestroy()
     }
 

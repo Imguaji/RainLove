@@ -13,10 +13,12 @@ import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.viewModels
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
@@ -37,10 +39,14 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.Path
+import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.core.content.ContextCompat
 import com.rainlove.app.media.BilibiliVideo
+import com.rainlove.app.history.HeartRateRecord
 import com.rainlove.app.media.NeteaseMusic
 import com.rainlove.app.media.ExternalLink
 import com.rainlove.app.media.TriggerTarget
@@ -71,6 +77,7 @@ private fun RainLoveScreen(vm: RainLoveViewModel) {
     val state by vm.ui.collectAsState()
     val context = androidx.compose.ui.platform.LocalContext.current
     var pendingBluetoothAction by remember { mutableStateOf(BluetoothAction.NONE) }
+    var showHistory by remember { mutableStateOf(false) }
     val permissionLauncher = rememberLauncherForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) {
         when (pendingBluetoothAction) {
             BluetoothAction.SCAN -> if (missingBluetoothPermissions(context).isEmpty()) vm.scanForDevices()
@@ -83,6 +90,11 @@ private fun RainLoveScreen(vm: RainLoveViewModel) {
         uri ?: return@rememberLauncherForActivityResult
         context.contentResolver.takePersistableUriPermission(uri, android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION)
         vm.selectMusic(uri)
+    }
+    val historyExportLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.CreateDocument("text/csv")
+    ) { uri ->
+        uri?.let(vm::exportHistory)
     }
     val overlayPermissionLauncher = rememberLauncherForActivityResult(ActivityResultContracts.StartActivityForResult()) {
         vm.setExternalBackgroundDirect(Settings.canDrawOverlays(context))
@@ -362,8 +374,49 @@ private fun RainLoveScreen(vm: RainLoveViewModel) {
             }) {
                 Text(if (state.monitoring) "停止心动模式" else "开启心动模式")
             }
+            Button(onClick = {
+                showHistory = !showHistory
+                if (showHistory) vm.refreshHistory()
+            }) {
+                Text(if (showHistory) "收起心率历史" else "查看心率历史")
+            }
+            if (showHistory) {
+                Text("最近 ${state.historyRecords.size} 个采样点（最多显示 300 个）")
+                HeartRateHistoryChart(state.historyRecords)
+                Button(onClick = vm::refreshHistory) { Text("刷新历史") }
+                Button(onClick = { historyExportLauncher.launch("rainlove-heart-rate.csv") }) {
+                    Text("导出全部心率记录 CSV")
+                }
+            }
             Text("娱乐项目，不用于诊断或监测疾病。", style = MaterialTheme.typography.bodySmall)
         }
+    }
+}
+
+@Composable
+private fun HeartRateHistoryChart(records: List<HeartRateRecord>) {
+    if (records.size < 2) {
+        Text("暂无足够的历史心率数据")
+        return
+    }
+    val minBpm = records.minOf { it.bpm } - 5
+    val maxBpm = records.maxOf { it.bpm } + 5
+    Text("${minBpm + 5}–${maxBpm - 5} BPM")
+    Canvas(Modifier.fillMaxWidth().height(180.dp)) {
+        val firstTime = records.first().timestampMs
+        val timeSpan = (records.last().timestampMs - firstTime).coerceAtLeast(1L).toFloat()
+        val bpmSpan = (maxBpm - minBpm).coerceAtLeast(1).toFloat()
+        val path = Path()
+        records.forEachIndexed { index, record ->
+            val x = (record.timestampMs - firstTime) / timeSpan * size.width
+            val y = size.height - (record.bpm - minBpm) / bpmSpan * size.height
+            if (index == 0 || record.timestampMs - records[index - 1].timestampMs > 120_000L) {
+                path.moveTo(x, y)
+            } else {
+                path.lineTo(x, y)
+            }
+        }
+        drawPath(path, color = Color(0xFFE91E63), style = Stroke(width = 3.dp.toPx()))
     }
 }
 

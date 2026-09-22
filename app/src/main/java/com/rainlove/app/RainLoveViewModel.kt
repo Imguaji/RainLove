@@ -13,6 +13,9 @@ import android.os.SystemClock
 import android.provider.OpenableColumns
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.AndroidViewModel
+import androidx.lifecycle.viewModelScope
+import com.rainlove.app.history.HeartRateHistory
+import com.rainlove.app.history.HeartRateRecord
 import com.rainlove.app.media.MusicPlayer
 import com.rainlove.app.media.BilibiliVideo
 import com.rainlove.app.media.NeteaseMusic
@@ -26,6 +29,9 @@ import com.rainlove.app.trigger.HeartRateTriggerEngine
 import com.rainlove.app.trigger.TriggerConfig
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 data class RainLoveUiState(
     val bpm: Int = 72,
@@ -55,6 +61,7 @@ data class RainLoveUiState(
     val selectedDeviceAddress: String? = null,
     val selectedDeviceName: String? = null,
     val triggerState: HeartRateTriggerEngine.State = HeartRateTriggerEngine.State.ARMED,
+    val historyRecords: List<HeartRateRecord> = emptyList(),
 )
 
 class RainLoveViewModel(application: Application) : AndroidViewModel(application) {
@@ -63,6 +70,8 @@ class RainLoveViewModel(application: Application) : AndroidViewModel(application
     private val _ui = MutableStateFlow(loadState())
     val ui = _ui.asStateFlow()
     private val musicPlayer = MusicPlayer(application, ::onMusicEvent)
+    private val history = HeartRateHistory(application)
+    private var lastDemoHistorySampleElapsedMs = 0L
     private var engine = HeartRateTriggerEngine(_ui.value.toTriggerConfig())
     private var deviceScanner: BleHeartRateScanner? = null
     private val demoHandler = Handler(Looper.getMainLooper())
@@ -154,6 +163,7 @@ class RainLoveViewModel(application: Application) : AndroidViewModel(application
         }
         rebuildEngine()
         if (_ui.value.demoMode) {
+            lastDemoHistorySampleElapsedMs = 0L
             _ui.value = _ui.value.copy(monitoring = true, status = "Demo 模式运行中")
             startDemoTicker()
         } else {
@@ -196,6 +206,29 @@ class RainLoveViewModel(application: Application) : AndroidViewModel(application
     fun setDemoBpm(value: Int) {
         _ui.value = _ui.value.copy(bpm = value)
         if (_ui.value.monitoring && _ui.value.demoMode) handleDemoHeartRate(value)
+    }
+
+    fun refreshHistory() {
+        viewModelScope.launch {
+            val records = withContext(Dispatchers.IO) { history.latest() }
+            _ui.value = _ui.value.copy(historyRecords = records)
+        }
+    }
+
+    fun exportHistory(uri: Uri) {
+        viewModelScope.launch {
+            val result = withContext(Dispatchers.IO) {
+                runCatching {
+                    val output = getApplication<Application>().contentResolver.openOutputStream(uri)
+                        ?: error("无法创建导出文件")
+                    history.exportCsv(output)
+                }
+            }
+            _ui.value = _ui.value.copy(
+                status = if (result.isSuccess) "心率历史已导出为 CSV"
+                else "导出心率历史失败：${result.exceptionOrNull()?.message ?: "未知错误"}",
+            )
+        }
     }
 
     fun setHeartRateTransport(transport: HeartRateTransport) {
@@ -436,6 +469,14 @@ class RainLoveViewModel(application: Application) : AndroidViewModel(application
     }
 
     private fun handleDemoHeartRate(bpm: Int) {
+        val nowMs = SystemClock.elapsedRealtime()
+        if (lastDemoHistorySampleElapsedMs == 0L || nowMs - lastDemoHistorySampleElapsedMs >= 1_000L) {
+            lastDemoHistorySampleElapsedMs = nowMs
+            val timestampMs = System.currentTimeMillis()
+            viewModelScope.launch(Dispatchers.IO) {
+                runCatching { history.record(timestampMs, bpm, "DEMO") }
+            }
+        }
         when (engine.onHeartRate(bpm, SystemClock.elapsedRealtime())) {
             HeartRateTriggerEngine.Event.StartPlayback -> {
                 val status = when (_ui.value.triggerTarget) {
