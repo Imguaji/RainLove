@@ -20,6 +20,8 @@ internal object RainLovePreferences {
     const val EXTERNAL_LINK = "external_link"
     const val EXTERNAL_PACKAGE = "external_package"
     const val EXTERNAL_AUTO_PLAY = "external_auto_play"
+    const val RESUME_ON_BOOT = "resume_on_boot"
+    const val MONITORING_DESIRED = "monitoring_desired"
     const val HEART_RATE_TRANSPORT = "heart_rate_transport"
     const val DEVICE_ADDRESS = "device_address"
     const val DEVICE_NAME = "device_name"

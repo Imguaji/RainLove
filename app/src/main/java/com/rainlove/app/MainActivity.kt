@@ -167,6 +167,15 @@ private fun RainLoveScreen(vm: RainLoveViewModel) {
                         ) { Text("安装 ANT+ Plugins Service") }
                     }
                 }
+                Row(
+                    Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Text("开机自动恢复监测")
+                    Switch(checked = state.resumeOnBoot, onCheckedChange = vm::setResumeOnBoot)
+                }
+                Text("仅在关机前正在监测、且所需权限仍有效时自动恢复；手动停止后不会自动启动。")
             }
 
             SettingSlider("触发心率", state.triggerBpm, 80..200, vm::setTriggerBpm, enabled = !state.monitoring)
@@ -409,7 +418,11 @@ private fun missingMonitoringPermissions(
     val permissions = if (transport == HeartRateTransport.BLE) {
         requiredBluetoothPermissions().toMutableList()
     } else {
-        mutableListOf()
+        if (Build.VERSION.SDK_INT >= 31) {
+            mutableListOf(Manifest.permission.BLUETOOTH_CONNECT)
+        } else {
+            mutableListOf()
+        }
     }
     if (Build.VERSION.SDK_INT >= 33) permissions += Manifest.permission.POST_NOTIFICATIONS
     return permissions.filter { ContextCompat.checkSelfPermission(context, it) != PackageManager.PERMISSION_GRANTED }

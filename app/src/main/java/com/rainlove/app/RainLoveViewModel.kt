@@ -47,6 +47,7 @@ data class RainLoveUiState(
     val externalAutoPlay: Boolean = false,
     val externalBackgroundDirect: Boolean = false,
     val demoMode: Boolean = true,
+    val resumeOnBoot: Boolean = false,
     val heartRateTransport: HeartRateTransport = HeartRateTransport.BLE,
     val monitoring: Boolean = false,
     val scanningDevices: Boolean = false,
@@ -185,6 +186,11 @@ class RainLoveViewModel(application: Application) : AndroidViewModel(application
         if (enabled) stopDeviceScan()
         _ui.value = _ui.value.copy(demoMode = enabled)
         preferences.edit().putBoolean(RainLovePreferences.DEMO_MODE, enabled).apply()
+    }
+
+    fun setResumeOnBoot(enabled: Boolean) {
+        _ui.value = _ui.value.copy(resumeOnBoot = enabled)
+        preferences.edit().putBoolean(RainLovePreferences.RESUME_ON_BOOT, enabled).apply()
     }
 
     fun setDemoBpm(value: Int) {
@@ -528,6 +534,7 @@ class RainLoveViewModel(application: Application) : AndroidViewModel(application
                 preferences.getBoolean(RainLovePreferences.BILIBILI_BACKGROUND_DIRECT, false)
             },
             demoMode = preferences.getBoolean(RainLovePreferences.DEMO_MODE, true),
+            resumeOnBoot = preferences.getBoolean(RainLovePreferences.RESUME_ON_BOOT, false),
             heartRateTransport = preferences.getString(RainLovePreferences.HEART_RATE_TRANSPORT, null)
                 ?.let { runCatching { HeartRateTransport.valueOf(it) }.getOrNull() }
                 ?: HeartRateTransport.BLE,

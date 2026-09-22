@@ -67,6 +67,9 @@ class HeartRateForegroundService : Service(), HeartRateSource.Listener {
         isRunning = true
         currentStatus = "正在启动心率监测…"
         startForeground(NOTIFICATION_ID, buildNotification("正在启动心率监测…"))
+        getSharedPreferences(RainLovePreferences.NAME, MODE_PRIVATE).edit()
+            .putBoolean(RainLovePreferences.MONITORING_DESIRED, true)
+            .commit()
         broadcastState(monitoring = true, status = "准备连接")
         val preferences = getSharedPreferences(RainLovePreferences.NAME, MODE_PRIVATE)
         heartRateSource = when (heartRateTransport) {
@@ -221,6 +224,9 @@ class HeartRateForegroundService : Service(), HeartRateSource.Listener {
     private fun stopMonitoring(status: String) {
         isRunning = false
         currentStatus = status
+        getSharedPreferences(RainLovePreferences.NAME, MODE_PRIVATE).edit()
+            .putBoolean(RainLovePreferences.MONITORING_DESIRED, false)
+            .commit()
         lastHeartRateBpm = null
         mainHandler.removeCallbacks(stateAdvanceRunnable)
         val source = heartRateSource
