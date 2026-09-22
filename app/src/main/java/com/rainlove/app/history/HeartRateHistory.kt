@@ -45,6 +45,8 @@ class HeartRateHistory(context: Context) {
         return records.asReversed()
     }
 
+    fun deleteAll(): Int = database.writableDatabase.delete(TABLE, null, null)
+
     fun exportCsv(output: OutputStream) {
         OutputStreamWriter(output, Charsets.UTF_8).buffered().use { writer ->
             writer.write("timestamp_utc,bpm,source\n")

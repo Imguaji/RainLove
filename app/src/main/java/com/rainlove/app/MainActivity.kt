@@ -81,6 +81,7 @@ private fun RainLoveScreen(vm: RainLoveViewModel) {
     val context = androidx.compose.ui.platform.LocalContext.current
     var pendingBluetoothAction by remember { mutableStateOf(BluetoothAction.NONE) }
     var showHistory by remember { mutableStateOf(false) }
+    var pendingClearHistory by remember { mutableStateOf(false) }
     var profileName by remember { mutableStateOf("") }
     var pendingDeleteProfile by remember { mutableStateOf<String?>(null) }
     val permissionLauncher = rememberLauncherForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) {
@@ -119,6 +120,22 @@ private fun RainLoveScreen(vm: RainLoveViewModel) {
             },
             dismissButton = {
                 TextButton(onClick = { pendingDeleteProfile = null }) { Text("取消") }
+            },
+        )
+    }
+    if (pendingClearHistory) {
+        AlertDialog(
+            onDismissRequest = { pendingClearHistory = false },
+            title = { Text("清空心率历史？") },
+            text = { Text("将永久删除 RainLove 保存的全部本地心率记录。此前导出的 CSV 文件不受影响。") },
+            confirmButton = {
+                TextButton(onClick = {
+                    vm.clearHistory()
+                    pendingClearHistory = false
+                }) { Text("清空") }
+            },
+            dismissButton = {
+                TextButton(onClick = { pendingClearHistory = false }) { Text("取消") }
             },
         )
     }
@@ -409,6 +426,9 @@ private fun RainLoveScreen(vm: RainLoveViewModel) {
                 Button(onClick = vm::refreshHistory) { Text("刷新历史") }
                 Button(onClick = { historyExportLauncher.launch("rainlove-heart-rate.csv") }) {
                     Text("导出全部心率记录 CSV")
+                }
+                TextButton(onClick = { pendingClearHistory = true }, enabled = !state.monitoring) {
+                    Text("清空本地心率历史")
                 }
             }
             Text("触发方案")

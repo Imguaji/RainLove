@@ -319,6 +319,24 @@ class RainLoveViewModel(application: Application) : AndroidViewModel(application
         }
     }
 
+    fun clearHistory() {
+        if (_ui.value.monitoring || HeartRateForegroundService.isRunning) {
+            _ui.value = _ui.value.copy(status = "请先停止监测，再清空历史")
+            return
+        }
+        viewModelScope.launch {
+            val result = withContext(Dispatchers.IO) { runCatching { history.deleteAll() } }
+            _ui.value = if (result.isSuccess) {
+                _ui.value.copy(
+                    historyRecords = emptyList(),
+                    status = "已删除 ${result.getOrThrow()} 条本地心率记录",
+                )
+            } else {
+                _ui.value.copy(status = "清理心率记录失败：${result.exceptionOrNull()?.message ?: "未知错误"}")
+            }
+        }
+    }
+
     fun exportHistory(uri: Uri) {
         viewModelScope.launch {
             val result = withContext(Dispatchers.IO) {
