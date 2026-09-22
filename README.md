@@ -47,6 +47,20 @@
 
 项目不附带任何商业音乐。请使用“选择本地音乐”选择你有权使用的音频文件。
 
+## 发布构建
+
+运行 `.\gradlew.bat testDebugUnitTest lintDebug assembleRelease` 可检查代码并生成未签名的 Release APK。未签名产物仅用于构建检查，不能直接作为正式安装包分发。正式发布前，请在 Android Studio 中创建并妥善备份自己的密钥库，再于当前 PowerShell 会话设置以下四个环境变量；不要把密钥库或密码提交到仓库：
+
+```powershell
+$env:RAINLOVE_RELEASE_STORE_FILE = 'D:\安全位置\rainlove-release.jks'
+$env:RAINLOVE_RELEASE_STORE_PASSWORD = [System.Net.NetworkCredential]::new('', (Read-Host '密钥库密码' -AsSecureString)).Password
+$env:RAINLOVE_RELEASE_KEY_ALIAS = '<密钥别名>'
+$env:RAINLOVE_RELEASE_KEY_PASSWORD = [System.Net.NetworkCredential]::new('', (Read-Host '密钥密码' -AsSecureString)).Password
+.\gradlew.bat assembleRelease
+```
+
+四项都设置后，Gradle 会签名 Release APK；缺少任意一项会直接报错，避免误把未签名版本当作发布包。构建后请用 Android SDK 的 `apksigner verify --print-certs` 检查签名，并在真机上测试后再发布。签名密钥丢失可能影响后续更新，请安全保管。仓库会忽略 `.jks` 和 `.keystore` 文件。
+
 哔哩哔哩模式接受 BV 号或包含 BV 号的完整视频链接。启用“打开后尝试自动播放”时，RainLove 会打开哔哩哔哩 App，并在播放器加载期间发送三次播放命令。该行为会受哔哩哔哩版本、网络和页面状态影响。RainLove 界面在前台时，心率触发会直接启动链路。Android 10 及更高版本会限制后台界面启动；如需后台直接跳转，可主动开启开关并授予“显示在其他应用上层”权限。RainLove 不会创建悬浮窗，仅使用该权限满足系统的后台启动例外；未授权或权限被撤销时安全降级为通知。外部播放器启动后，RainLove 不会在心率恢复时强制关闭它。
 
 网易云模式接受纯数字歌曲 ID、`music.163.com` / `y.music.163.com` 歌曲分享链接和 `orpheus://song/...` 链接。RainLove 会先尝试网易云音乐 App 的歌曲深链，再尝试由 App 打开标准歌曲网页；未安装网易云音乐时回退到浏览器。自动播放同样通过延迟媒体播放命令尝试，能否成功取决于网易云音乐版本、登录状态、版权和页面状态。

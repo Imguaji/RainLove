@@ -4,6 +4,21 @@ plugins {
     alias(libs.plugins.kotlin.compose)
 }
 
+val releaseStoreFile = providers.environmentVariable("RAINLOVE_RELEASE_STORE_FILE").orNull
+val releaseStorePassword = providers.environmentVariable("RAINLOVE_RELEASE_STORE_PASSWORD").orNull
+val releaseKeyAlias = providers.environmentVariable("RAINLOVE_RELEASE_KEY_ALIAS").orNull
+val releaseKeyPassword = providers.environmentVariable("RAINLOVE_RELEASE_KEY_PASSWORD").orNull
+val releaseSigningValues = listOf(
+    releaseStoreFile,
+    releaseStorePassword,
+    releaseKeyAlias,
+    releaseKeyPassword,
+)
+val releaseSigningConfigured = releaseSigningValues.all { !it.isNullOrBlank() }
+if (releaseSigningValues.any { !it.isNullOrBlank() } && !releaseSigningConfigured) {
+    throw GradleException("Release signing requires all four RAINLOVE_RELEASE_* environment variables")
+}
+
 android {
     namespace = "com.rainlove.app"
     compileSdk = 35
@@ -15,6 +30,27 @@ android {
         versionCode = 1
         versionName = "0.1.0"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
+    }
+
+    signingConfigs {
+        if (releaseSigningConfigured) {
+            create("release") {
+                val keystoreFile = file(releaseStoreFile!!)
+                if (!keystoreFile.isFile) {
+                    throw GradleException("Release keystore file does not exist: $keystoreFile")
+                }
+                storeFile = keystoreFile
+                storePassword = releaseStorePassword
+                keyAlias = releaseKeyAlias
+                keyPassword = releaseKeyPassword
+            }
+        }
+    }
+
+    buildTypes {
+        release {
+            if (releaseSigningConfigured) signingConfig = signingConfigs.getByName("release")
+        }
     }
 
     buildFeatures { compose = true }
