@@ -50,6 +50,7 @@ import com.rainlove.app.history.HeartRateRecord
 import com.rainlove.app.media.NeteaseMusic
 import com.rainlove.app.media.ExternalLink
 import com.rainlove.app.media.TriggerTarget
+import com.rainlove.app.profiles.TriggerProfileStore
 import com.rainlove.app.sensor.HeartRateTransport
 
 class MainActivity : ComponentActivity() {
@@ -78,6 +79,7 @@ private fun RainLoveScreen(vm: RainLoveViewModel) {
     val context = androidx.compose.ui.platform.LocalContext.current
     var pendingBluetoothAction by remember { mutableStateOf(BluetoothAction.NONE) }
     var showHistory by remember { mutableStateOf(false) }
+    var profileName by remember { mutableStateOf("") }
     val permissionLauncher = rememberLauncherForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) {
         when (pendingBluetoothAction) {
             BluetoothAction.SCAN -> if (missingBluetoothPermissions(context).isEmpty()) vm.scanForDevices()
@@ -386,6 +388,27 @@ private fun RainLoveScreen(vm: RainLoveViewModel) {
                 Button(onClick = vm::refreshHistory) { Text("刷新历史") }
                 Button(onClick = { historyExportLauncher.launch("rainlove-heart-rate.csv") }) {
                     Text("导出全部心率记录 CSV")
+                }
+            }
+            Text("触发方案")
+            OutlinedTextField(
+                value = profileName,
+                onValueChange = { profileName = it },
+                label = { Text("方案名称，如骑行或日常") },
+                singleLine = true,
+                enabled = !state.monitoring,
+                modifier = Modifier.fillMaxWidth(),
+            )
+            Button(
+                onClick = { vm.saveProfile(profileName) },
+                enabled = !state.monitoring && TriggerProfileStore.normalizeName(profileName) != null,
+            ) { Text("保存/覆盖当前方案") }
+            state.profileNames.forEach { name ->
+                Button(onClick = {
+                    vm.loadProfile(name)
+                    profileName = name
+                }, enabled = !state.monitoring) {
+                    Text("切换到 $name")
                 }
             }
             Text("娱乐项目，不用于诊断或监测疾病。", style = MaterialTheme.typography.bodySmall)

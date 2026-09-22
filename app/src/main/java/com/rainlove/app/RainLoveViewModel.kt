@@ -11,6 +11,7 @@ import android.os.Handler
 import android.os.Looper
 import android.os.SystemClock
 import android.provider.OpenableColumns
+import android.provider.Settings
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
@@ -21,6 +22,8 @@ import com.rainlove.app.media.BilibiliVideo
 import com.rainlove.app.media.NeteaseMusic
 import com.rainlove.app.media.ExternalLink
 import com.rainlove.app.media.TriggerTarget
+import com.rainlove.app.profiles.TriggerProfile
+import com.rainlove.app.profiles.TriggerProfileStore
 import com.rainlove.app.sensor.BleHeartRateDevice
 import com.rainlove.app.sensor.BleHeartRateScanner
 import com.rainlove.app.sensor.HeartRateTransport
@@ -62,6 +65,7 @@ data class RainLoveUiState(
     val selectedDeviceName: String? = null,
     val triggerState: HeartRateTriggerEngine.State = HeartRateTriggerEngine.State.ARMED,
     val historyRecords: List<HeartRateRecord> = emptyList(),
+    val profileNames: List<String> = emptyList(),
 )
 
 class RainLoveViewModel(application: Application) : AndroidViewModel(application) {
@@ -71,6 +75,7 @@ class RainLoveViewModel(application: Application) : AndroidViewModel(application
     val ui = _ui.asStateFlow()
     private val musicPlayer = MusicPlayer(application, ::onMusicEvent)
     private val history = HeartRateHistory(application)
+    private val profileStore = TriggerProfileStore(preferences)
     private var lastDemoHistorySampleElapsedMs = 0L
     private var engine = HeartRateTriggerEngine(_ui.value.toTriggerConfig())
     private var deviceScanner: BleHeartRateScanner? = null
@@ -201,6 +206,95 @@ class RainLoveViewModel(application: Application) : AndroidViewModel(application
     fun setResumeOnBoot(enabled: Boolean) {
         _ui.value = _ui.value.copy(resumeOnBoot = enabled)
         preferences.edit().putBoolean(RainLovePreferences.RESUME_ON_BOOT, enabled).apply()
+    }
+
+    fun saveProfile(name: String) {
+        if (_ui.value.monitoring) return
+        val state = _ui.value
+        val profile = TriggerProfile(
+            triggerBpm = state.triggerBpm,
+            recoveryBpm = state.recoveryBpm,
+            triggerSeconds = state.triggerSeconds,
+            recoverySeconds = state.recoverySeconds,
+            cooldownSeconds = state.cooldownSeconds,
+            demoMode = state.demoMode,
+            transport = state.heartRateTransport,
+            deviceAddress = state.selectedDeviceAddress,
+            deviceName = state.selectedDeviceName,
+            triggerTarget = state.triggerTarget,
+            musicUri = preferences.getString(RainLovePreferences.MUSIC_URI, null),
+            musicName = state.musicName,
+            bilibiliBvid = state.bilibiliBvid,
+            bilibiliAutoPlay = state.bilibiliAutoPlay,
+            neteaseSongId = state.neteaseSongId,
+            neteaseAutoPlay = state.neteaseAutoPlay,
+            externalLink = state.externalLink,
+            externalPackage = state.externalPackage,
+            externalAutoPlay = state.externalAutoPlay,
+            externalBackgroundDirect = state.externalBackgroundDirect,
+        )
+        val savedName = profileStore.save(name, profile)
+        _ui.value = _ui.value.copy(
+            profileNames = profileStore.names(),
+            status = if (savedName == null) "方案名称不能为空、超长或包含控制字符"
+            else "已保存方案：$savedName",
+        )
+    }
+
+    fun loadProfile(name: String) {
+        if (_ui.value.monitoring) return
+        val profile = profileStore.load(name) ?: return
+        stopDeviceScan()
+        musicPlayer.pause()
+        val canOpenBackground = profile.externalBackgroundDirect && Settings.canDrawOverlays(getApplication())
+        if (profile.musicUri == null) musicPlayer.clearSelection()
+        else musicPlayer.select(Uri.parse(profile.musicUri))
+        preferences.edit()
+            .putInt(RainLovePreferences.TRIGGER_BPM, profile.triggerBpm)
+            .putInt(RainLovePreferences.RECOVERY_BPM, profile.recoveryBpm)
+            .putInt(RainLovePreferences.TRIGGER_SECONDS, profile.triggerSeconds)
+            .putInt(RainLovePreferences.RECOVERY_SECONDS, profile.recoverySeconds)
+            .putInt(RainLovePreferences.COOLDOWN_SECONDS, profile.cooldownSeconds)
+            .putBoolean(RainLovePreferences.DEMO_MODE, profile.demoMode)
+            .putString(RainLovePreferences.HEART_RATE_TRANSPORT, profile.transport.name)
+            .putString(RainLovePreferences.DEVICE_ADDRESS, profile.deviceAddress)
+            .putString(RainLovePreferences.DEVICE_NAME, profile.deviceName)
+            .putString(RainLovePreferences.TRIGGER_TARGET, profile.triggerTarget.name)
+            .putString(RainLovePreferences.MUSIC_URI, profile.musicUri)
+            .putString(RainLovePreferences.MUSIC_NAME, profile.musicName)
+            .putString(RainLovePreferences.BILIBILI_BVID, profile.bilibiliBvid)
+            .putBoolean(RainLovePreferences.BILIBILI_AUTO_PLAY, profile.bilibiliAutoPlay)
+            .putString(RainLovePreferences.NETEASE_SONG_ID, profile.neteaseSongId)
+            .putBoolean(RainLovePreferences.NETEASE_AUTO_PLAY, profile.neteaseAutoPlay)
+            .putString(RainLovePreferences.EXTERNAL_LINK, profile.externalLink)
+            .putString(RainLovePreferences.EXTERNAL_PACKAGE, profile.externalPackage)
+            .putBoolean(RainLovePreferences.EXTERNAL_AUTO_PLAY, profile.externalAutoPlay)
+            .putBoolean(RainLovePreferences.EXTERNAL_BACKGROUND_DIRECT, canOpenBackground)
+            .apply()
+        _ui.value = _ui.value.copy(
+            triggerBpm = profile.triggerBpm,
+            recoveryBpm = profile.recoveryBpm,
+            triggerSeconds = profile.triggerSeconds,
+            recoverySeconds = profile.recoverySeconds,
+            cooldownSeconds = profile.cooldownSeconds,
+            demoMode = profile.demoMode,
+            heartRateTransport = profile.transport,
+            selectedDeviceAddress = profile.deviceAddress,
+            selectedDeviceName = profile.deviceName,
+            triggerTarget = profile.triggerTarget,
+            musicName = profile.musicName,
+            musicPlaying = false,
+            bilibiliBvid = profile.bilibiliBvid,
+            bilibiliAutoPlay = profile.bilibiliAutoPlay,
+            neteaseSongId = profile.neteaseSongId,
+            neteaseAutoPlay = profile.neteaseAutoPlay,
+            externalLink = profile.externalLink,
+            externalPackage = profile.externalPackage,
+            externalAutoPlay = profile.externalAutoPlay,
+            externalBackgroundDirect = canOpenBackground,
+            status = "已切换到方案：$name",
+        )
+        rebuildEngine()
     }
 
     fun setDemoBpm(value: Int) {
@@ -581,6 +675,8 @@ class RainLoveViewModel(application: Application) : AndroidViewModel(application
                 ?: HeartRateTransport.BLE,
             selectedDeviceAddress = preferences.getString(RainLovePreferences.DEVICE_ADDRESS, null),
             selectedDeviceName = preferences.getString(RainLovePreferences.DEVICE_NAME, null),
+            profileNames = preferences.getStringSet(RainLovePreferences.PROFILE_NAMES, emptySet())
+                .orEmpty().sorted(),
         )
     }
 

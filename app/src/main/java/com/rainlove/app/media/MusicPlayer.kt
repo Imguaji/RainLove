@@ -49,6 +49,11 @@ class MusicPlayer(
         player.prepare()
     }
 
+    fun clearSelection() {
+        selectedUri = null
+        player.clearMediaItems()
+    }
+
     fun play(): Boolean {
         if (selectedUri == null) return false
         player.seekTo(0)

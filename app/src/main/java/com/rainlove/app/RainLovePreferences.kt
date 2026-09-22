@@ -25,4 +25,5 @@ internal object RainLovePreferences {
     const val HEART_RATE_TRANSPORT = "heart_rate_transport"
     const val DEVICE_ADDRESS = "device_address"
     const val DEVICE_NAME = "device_name"
+    const val PROFILE_NAMES = "profile_names"
 }
