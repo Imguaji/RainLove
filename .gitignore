@@ -11,3 +11,4 @@ captures/
 *.aab
 *.jks
 *.keystore
+/app/src/debug/res/drawable/ic_launcher.jpg

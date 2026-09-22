@@ -47,6 +47,8 @@
 
 项目不附带任何商业音乐。请使用“选择本地音乐”选择你有权使用的音频文件。
 
+个人使用的 Debug 图标可以放在 `app/src/debug/res/drawable/ic_launcher.jpg`。该路径已被 Git 忽略，只影响本机 Debug APK；公开仓库和 Release APK 仍使用项目自带的默认图标。请勿把没有公开使用许可的图片打包分发。
+
 ## 发布构建
 
 运行 `.\gradlew.bat testDebugUnitTest lintDebug assembleRelease` 可检查代码并生成未签名的 Release APK。未签名产物仅用于构建检查，不能直接作为正式安装包分发。正式发布前，请在 Android Studio 中创建并妥善备份自己的密钥库，再于当前 PowerShell 会话设置以下四个环境变量；不要把密钥库或密码提交到仓库：
