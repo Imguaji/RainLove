@@ -16,6 +16,7 @@ import androidx.lifecycle.AndroidViewModel
 import com.rainlove.app.media.MusicPlayer
 import com.rainlove.app.media.BilibiliVideo
 import com.rainlove.app.media.NeteaseMusic
+import com.rainlove.app.media.ExternalLink
 import com.rainlove.app.media.TriggerTarget
 import com.rainlove.app.sensor.BleHeartRateDevice
 import com.rainlove.app.sensor.BleHeartRateScanner
@@ -41,6 +42,9 @@ data class RainLoveUiState(
     val bilibiliAutoPlay: Boolean = true,
     val neteaseSongId: String = "",
     val neteaseAutoPlay: Boolean = true,
+    val externalLink: String = "",
+    val externalPackage: String = "",
+    val externalAutoPlay: Boolean = false,
     val externalBackgroundDirect: Boolean = false,
     val demoMode: Boolean = true,
     val heartRateTransport: HeartRateTransport = HeartRateTransport.BLE,
@@ -138,6 +142,13 @@ class RainLoveViewModel(application: Application) : AndroidViewModel(application
             NeteaseMusic.normalizeSongId(_ui.value.neteaseSongId) == null
         ) {
             _ui.value = _ui.value.copy(status = "请输入有效的网易云歌曲 ID 或链接")
+            return
+        }
+        if (_ui.value.triggerTarget == TriggerTarget.EXTERNAL_LINK &&
+            (ExternalLink.normalizeUrl(_ui.value.externalLink) == null ||
+                ExternalLink.normalizePackage(_ui.value.externalPackage) == null)
+        ) {
+            _ui.value = _ui.value.copy(status = "请输入有效的媒体链接和 App 包名")
             return
         }
         rebuildEngine()
@@ -362,6 +373,39 @@ class RainLoveViewModel(application: Application) : AndroidViewModel(application
         preferences.edit().putBoolean(RainLovePreferences.NETEASE_AUTO_PLAY, enabled).apply()
     }
 
+    fun setExternalLink(value: String) {
+        if (_ui.value.monitoring) return
+        _ui.value = _ui.value.copy(externalLink = value)
+        preferences.edit().putString(RainLovePreferences.EXTERNAL_LINK, value).apply()
+    }
+
+    fun setExternalPackage(value: String) {
+        if (_ui.value.monitoring) return
+        _ui.value = _ui.value.copy(externalPackage = value)
+        preferences.edit().putString(RainLovePreferences.EXTERNAL_PACKAGE, value).apply()
+    }
+
+    fun setExternalAutoPlay(enabled: Boolean) {
+        if (_ui.value.monitoring) return
+        _ui.value = _ui.value.copy(externalAutoPlay = enabled)
+        preferences.edit().putBoolean(RainLovePreferences.EXTERNAL_AUTO_PLAY, enabled).apply()
+    }
+
+    fun testExternalLink() {
+        _ui.value = _ui.value.copy(
+            status = if (ExternalLink.open(
+                    getApplication(),
+                    _ui.value.externalLink,
+                    _ui.value.externalPackage,
+                    _ui.value.externalAutoPlay,
+                )) {
+                "已发送外部媒体打开请求；请确认目标 App 是否正确打开"
+            } else {
+                "外部媒体链接或包名无效"
+            }
+        )
+    }
+
     fun testBilibiliVideo() {
         val bvid = BilibiliVideo.normalizeBvid(_ui.value.bilibiliBvid)
         _ui.value = _ui.value.copy(
@@ -416,6 +460,19 @@ class RainLoveViewModel(application: Application) : AndroidViewModel(application
                             "已触发，但无法打开网易云歌曲"
                         }
                     }
+                    TriggerTarget.EXTERNAL_LINK -> {
+                        if (ExternalLink.open(
+                                getApplication(),
+                                _ui.value.externalLink,
+                                _ui.value.externalPackage,
+                                _ui.value.externalAutoPlay,
+                            )
+                        ) {
+                            "已发送外部媒体打开请求"
+                        } else {
+                            "已触发，但外部媒体链接或包名无效"
+                        }
+                    }
                 }
                 _ui.value = _ui.value.copy(status = status)
             }
@@ -462,6 +519,9 @@ class RainLoveViewModel(application: Application) : AndroidViewModel(application
             bilibiliAutoPlay = preferences.getBoolean(RainLovePreferences.BILIBILI_AUTO_PLAY, true),
             neteaseSongId = preferences.getString(RainLovePreferences.NETEASE_SONG_ID, "") ?: "",
             neteaseAutoPlay = preferences.getBoolean(RainLovePreferences.NETEASE_AUTO_PLAY, true),
+            externalLink = preferences.getString(RainLovePreferences.EXTERNAL_LINK, "") ?: "",
+            externalPackage = preferences.getString(RainLovePreferences.EXTERNAL_PACKAGE, "") ?: "",
+            externalAutoPlay = preferences.getBoolean(RainLovePreferences.EXTERNAL_AUTO_PLAY, false),
             externalBackgroundDirect = if (preferences.contains(RainLovePreferences.EXTERNAL_BACKGROUND_DIRECT)) {
                 preferences.getBoolean(RainLovePreferences.EXTERNAL_BACKGROUND_DIRECT, false)
             } else {

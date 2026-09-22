@@ -42,6 +42,11 @@
             android:excludeFromRecents="true"
             android:exported="false"
             android:theme="@style/Theme.RainLove.Transparent" />
+        <activity
+            android:name=".ExternalLinkLaunchActivity"
+            android:excludeFromRecents="true"
+            android:exported="false"
+            android:theme="@style/Theme.RainLove.Transparent" />
         <service
             android:name=".HeartRateForegroundService"
             android:exported="false"

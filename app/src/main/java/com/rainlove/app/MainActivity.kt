@@ -42,6 +42,7 @@ import androidx.compose.ui.unit.sp
 import androidx.core.content.ContextCompat
 import com.rainlove.app.media.BilibiliVideo
 import com.rainlove.app.media.NeteaseMusic
+import com.rainlove.app.media.ExternalLink
 import com.rainlove.app.media.TriggerTarget
 import com.rainlove.app.sensor.HeartRateTransport
 
@@ -193,6 +194,12 @@ private fun RainLoveScreen(vm: RainLoveViewModel) {
                 enabled = !state.monitoring,
                 onClick = { vm.setTriggerTarget(TriggerTarget.NETEASE_MUSIC) },
             )
+            TriggerTargetOption(
+                label = "打开其他音乐 App 链接",
+                selected = state.triggerTarget == TriggerTarget.EXTERNAL_LINK,
+                enabled = !state.monitoring,
+                onClick = { vm.setTriggerTarget(TriggerTarget.EXTERNAL_LINK) },
+            )
             when (state.triggerTarget) {
                 TriggerTarget.LOCAL_MUSIC -> {
                     Text("音乐：${state.musicName}")
@@ -262,6 +269,46 @@ private fun RainLoveScreen(vm: RainLoveViewModel) {
                         enabled = !state.monitoring &&
                             NeteaseMusic.normalizeSongId(state.neteaseSongId) != null,
                     ) { Text("测试打开歌曲") }
+                }
+                TriggerTarget.EXTERNAL_LINK -> {
+                    OutlinedTextField(
+                        value = state.externalLink,
+                        onValueChange = vm::setExternalLink,
+                        label = { Text("歌曲/内容链接或 App 深链") },
+                        singleLine = true,
+                        enabled = !state.monitoring,
+                        isError = state.externalLink.isNotBlank() &&
+                            ExternalLink.normalizeUrl(state.externalLink) == null,
+                        modifier = Modifier.fillMaxWidth(),
+                    )
+                    OutlinedTextField(
+                        value = state.externalPackage,
+                        onValueChange = vm::setExternalPackage,
+                        label = { Text("目标 App 包名（可留空）") },
+                        singleLine = true,
+                        enabled = !state.monitoring,
+                        isError = ExternalLink.normalizePackage(state.externalPackage) == null,
+                        modifier = Modifier.fillMaxWidth(),
+                    )
+                    Text("指定包名可限定由该 App 打开；留空时由 Android 选择。目标 App 必须支持此链接，无法保证自动播放。")
+                    Row(
+                        Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Text("打开后尝试自动播放")
+                        Switch(
+                            checked = state.externalAutoPlay,
+                            onCheckedChange = vm::setExternalAutoPlay,
+                            enabled = !state.monitoring && state.externalPackage.isNotBlank(),
+                        )
+                    }
+                    Button(
+                        onClick = vm::testExternalLink,
+                        enabled = !state.monitoring &&
+                            ExternalLink.normalizeUrl(state.externalLink) != null &&
+                            ExternalLink.normalizePackage(state.externalPackage) != null,
+                    ) { Text("测试打开链接") }
                 }
             }
             if (state.triggerTarget != TriggerTarget.LOCAL_MUSIC) {

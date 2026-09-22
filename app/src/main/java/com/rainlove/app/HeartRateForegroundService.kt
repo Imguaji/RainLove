@@ -16,6 +16,7 @@ import androidx.core.app.NotificationCompat
 import com.rainlove.app.media.MusicPlayer
 import com.rainlove.app.media.BilibiliVideo
 import com.rainlove.app.media.NeteaseMusic
+import com.rainlove.app.media.ExternalLink
 import com.rainlove.app.media.TriggerTarget
 import com.rainlove.app.sensor.BleHeartRateDevice
 import com.rainlove.app.sensor.BleHeartRateSource
@@ -35,6 +36,9 @@ class HeartRateForegroundService : Service(), HeartRateSource.Listener {
     private var bilibiliAutoPlay = true
     private var neteaseSongId = ""
     private var neteaseAutoPlay = true
+    private var externalLink = ""
+    private var externalPackage = ""
+    private var externalAutoPlay = false
     private var externalBackgroundDirect = false
     private val mainHandler = Handler(Looper.getMainLooper())
     private var lastHeartRateBpm: Int? = null
@@ -107,6 +111,9 @@ class HeartRateForegroundService : Service(), HeartRateSource.Listener {
         bilibiliAutoPlay = preferences.getBoolean(RainLovePreferences.BILIBILI_AUTO_PLAY, true)
         neteaseSongId = preferences.getString(RainLovePreferences.NETEASE_SONG_ID, "") ?: ""
         neteaseAutoPlay = preferences.getBoolean(RainLovePreferences.NETEASE_AUTO_PLAY, true)
+        externalLink = preferences.getString(RainLovePreferences.EXTERNAL_LINK, "") ?: ""
+        externalPackage = preferences.getString(RainLovePreferences.EXTERNAL_PACKAGE, "") ?: ""
+        externalAutoPlay = preferences.getBoolean(RainLovePreferences.EXTERNAL_AUTO_PLAY, false)
         externalBackgroundDirect = if (preferences.contains(RainLovePreferences.EXTERNAL_BACKGROUND_DIRECT)) {
             preferences.getBoolean(RainLovePreferences.EXTERNAL_BACKGROUND_DIRECT, false)
         } else {
@@ -150,6 +157,7 @@ class HeartRateForegroundService : Service(), HeartRateSource.Listener {
                     }
                     TriggerTarget.BILIBILI_VIDEO -> notifyBilibiliTrigger()
                     TriggerTarget.NETEASE_MUSIC -> notifyNeteaseTrigger()
+                    TriggerTarget.EXTERNAL_LINK -> notifyExternalLinkTrigger()
                 }
             }
             HeartRateTriggerEngine.Event.StopPlayback -> {
@@ -320,6 +328,41 @@ class HeartRateForegroundService : Service(), HeartRateSource.Listener {
 
     private fun canOpenExternalDirectly(): Boolean = isAppVisible ||
         (externalBackgroundDirect && Settings.canDrawOverlays(this))
+
+    private fun notifyExternalLinkTrigger() {
+        val url = ExternalLink.normalizeUrl(externalLink)
+        val packageName = ExternalLink.normalizePackage(externalPackage)
+        if (url == null || packageName == null) {
+            onStatus("已触发，但外部媒体链接或包名无效")
+            return
+        }
+        if (canOpenExternalDirectly() && ExternalLink.open(this, url, packageName, externalAutoPlay)) {
+            getSystemService(NotificationManager::class.java).cancel(TRIGGER_NOTIFICATION_ID)
+            onStatus("达到触发条件，正在打开外部媒体…")
+            return
+        }
+        val openLink = PendingIntent.getActivity(
+            this,
+            4,
+            Intent(this, ExternalLinkLaunchActivity::class.java).apply {
+                putExtra(ExternalLinkLaunchActivity.EXTRA_URL, url)
+                putExtra(ExternalLinkLaunchActivity.EXTRA_PACKAGE, packageName)
+                putExtra(ExternalLinkLaunchActivity.EXTRA_AUTO_PLAY, externalAutoPlay)
+            },
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
+        )
+        val notification = NotificationCompat.Builder(this, TRIGGER_NOTIFICATION_CHANNEL_ID)
+            .setSmallIcon(android.R.drawable.ic_media_play)
+            .setContentTitle("心率已达到触发条件")
+            .setContentText("点击打开指定媒体")
+            .setContentIntent(openLink)
+            .setAutoCancel(true)
+            .setPriority(NotificationCompat.PRIORITY_HIGH)
+            .addAction(android.R.drawable.ic_media_play, "打开媒体", openLink)
+            .build()
+        getSystemService(NotificationManager::class.java).notify(TRIGGER_NOTIFICATION_ID, notification)
+        onStatus("达到触发条件；应用在后台，请点击通知打开外部媒体")
+    }
 
     private fun buildNotification(content: String): Notification {
         val openIntent = PendingIntent.getActivity(
