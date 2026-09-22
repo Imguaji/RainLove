@@ -41,6 +41,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.core.content.ContextCompat
 import com.rainlove.app.media.BilibiliVideo
+import com.rainlove.app.media.NeteaseMusic
 import com.rainlove.app.media.TriggerTarget
 import com.rainlove.app.sensor.HeartRateTransport
 
@@ -55,7 +56,7 @@ class MainActivity : ComponentActivity() {
     override fun onStart() {
         super.onStart()
         HeartRateForegroundService.setAppVisible(true)
-        viewModel.reconcileBilibiliBackgroundDirectPermission(Settings.canDrawOverlays(this))
+        viewModel.reconcileExternalBackgroundDirectPermission(Settings.canDrawOverlays(this))
     }
 
     override fun onStop() {
@@ -83,7 +84,7 @@ private fun RainLoveScreen(vm: RainLoveViewModel) {
         vm.selectMusic(uri)
     }
     val overlayPermissionLauncher = rememberLauncherForActivityResult(ActivityResultContracts.StartActivityForResult()) {
-        vm.setBilibiliBackgroundDirect(Settings.canDrawOverlays(context))
+        vm.setExternalBackgroundDirect(Settings.canDrawOverlays(context))
     }
 
     Scaffold { padding ->
@@ -186,39 +187,84 @@ private fun RainLoveScreen(vm: RainLoveViewModel) {
                 enabled = !state.monitoring,
                 onClick = { vm.setTriggerTarget(TriggerTarget.BILIBILI_VIDEO) },
             )
-            if (state.triggerTarget == TriggerTarget.LOCAL_MUSIC) {
-                Text("音乐：${state.musicName}")
-                Button(
-                    onClick = { musicLauncher.launch(arrayOf("audio/*")) },
-                    enabled = !state.monitoring,
-                ) { Text("选择本地音乐") }
-                Button(
-                    onClick = vm::toggleMusicPreview,
-                    enabled = !state.monitoring && state.musicName != "尚未选择音乐",
-                ) { Text(if (state.musicPlaying) "停止测试播放" else "测试播放本地音乐") }
-            } else {
-                OutlinedTextField(
-                    value = state.bilibiliBvid,
-                    onValueChange = vm::setBilibiliBvid,
-                    label = { Text("BV 号或完整视频链接") },
-                    singleLine = true,
-                    enabled = !state.monitoring,
-                    isError = state.bilibiliBvid.isNotBlank() &&
-                        BilibiliVideo.normalizeBvid(state.bilibiliBvid) == null,
-                    modifier = Modifier.fillMaxWidth(),
-                )
-                Row(
-                    Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    Text("打开后尝试自动播放")
-                    Switch(
-                        checked = state.bilibiliAutoPlay,
-                        onCheckedChange = vm::setBilibiliAutoPlay,
+            TriggerTargetOption(
+                label = "打开网易云指定歌曲",
+                selected = state.triggerTarget == TriggerTarget.NETEASE_MUSIC,
+                enabled = !state.monitoring,
+                onClick = { vm.setTriggerTarget(TriggerTarget.NETEASE_MUSIC) },
+            )
+            when (state.triggerTarget) {
+                TriggerTarget.LOCAL_MUSIC -> {
+                    Text("音乐：${state.musicName}")
+                    Button(
+                        onClick = { musicLauncher.launch(arrayOf("audio/*")) },
                         enabled = !state.monitoring,
-                    )
+                    ) { Text("选择本地音乐") }
+                    Button(
+                        onClick = vm::toggleMusicPreview,
+                        enabled = !state.monitoring && state.musicName != "尚未选择音乐",
+                    ) { Text(if (state.musicPlaying) "停止测试播放" else "测试播放本地音乐") }
                 }
+                TriggerTarget.BILIBILI_VIDEO -> {
+                    OutlinedTextField(
+                        value = state.bilibiliBvid,
+                        onValueChange = vm::setBilibiliBvid,
+                        label = { Text("BV 号或完整视频链接") },
+                        singleLine = true,
+                        enabled = !state.monitoring,
+                        isError = state.bilibiliBvid.isNotBlank() &&
+                            BilibiliVideo.normalizeBvid(state.bilibiliBvid) == null,
+                        modifier = Modifier.fillMaxWidth(),
+                    )
+                    Row(
+                        Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Text("打开后尝试自动播放")
+                        Switch(
+                            checked = state.bilibiliAutoPlay,
+                            onCheckedChange = vm::setBilibiliAutoPlay,
+                            enabled = !state.monitoring,
+                        )
+                    }
+                    Button(
+                        onClick = vm::testBilibiliVideo,
+                        enabled = !state.monitoring && BilibiliVideo.normalizeBvid(state.bilibiliBvid) != null,
+                    ) { Text("测试打开视频") }
+                }
+                TriggerTarget.NETEASE_MUSIC -> {
+                    OutlinedTextField(
+                        value = state.neteaseSongId,
+                        onValueChange = vm::setNeteaseSongId,
+                        label = { Text("网易云歌曲 ID 或分享链接") },
+                        singleLine = true,
+                        enabled = !state.monitoring,
+                        isError = state.neteaseSongId.isNotBlank() &&
+                            NeteaseMusic.normalizeSongId(state.neteaseSongId) == null,
+                        modifier = Modifier.fillMaxWidth(),
+                    )
+                    Row(
+                        Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Text("打开后尝试自动播放")
+                        Switch(
+                            checked = state.neteaseAutoPlay,
+                            onCheckedChange = vm::setNeteaseAutoPlay,
+                            enabled = !state.monitoring,
+                        )
+                    }
+                    Text("优先打开网易云音乐 App；未安装时回退到歌曲网页。")
+                    Button(
+                        onClick = vm::testNeteaseSong,
+                        enabled = !state.monitoring &&
+                            NeteaseMusic.normalizeSongId(state.neteaseSongId) != null,
+                    ) { Text("测试打开歌曲") }
+                }
+            }
+            if (state.triggerTarget != TriggerTarget.LOCAL_MUSIC) {
                 Row(
                     Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.SpaceBetween,
@@ -226,11 +272,11 @@ private fun RainLoveScreen(vm: RainLoveViewModel) {
                 ) {
                     Text("后台直接打开")
                     Switch(
-                        checked = state.bilibiliBackgroundDirect,
+                        checked = state.externalBackgroundDirect,
                         onCheckedChange = { enabled ->
                             when {
-                                !enabled -> vm.setBilibiliBackgroundDirect(false)
-                                Settings.canDrawOverlays(context) -> vm.setBilibiliBackgroundDirect(true)
+                                !enabled -> vm.setExternalBackgroundDirect(false)
+                                Settings.canDrawOverlays(context) -> vm.setExternalBackgroundDirect(true)
                                 else -> overlayPermissionLauncher.launch(
                                     Intent(
                                         Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
@@ -244,16 +290,12 @@ private fun RainLoveScreen(vm: RainLoveViewModel) {
                 }
                 Text("开启后需授予“显示在其他应用上层”权限；RainLove 不会显示悬浮窗，只用该权限请求后台直接跳转。")
                 Text(
-                    if (state.bilibiliBackgroundDirect) {
-                        "RainLove 在前台或后台触发时都会尝试直接打开视频；权限失效时自动降级为通知。"
+                    if (state.externalBackgroundDirect) {
+                        "RainLove 在前台或后台触发时都会尝试直接打开目标；权限失效时自动降级为通知。"
                     } else {
-                        "RainLove 在前台时直接打开视频；后台受 Android 限制，需点击通知。"
+                        "RainLove 在前台时直接打开目标；后台受 Android 限制，需点击通知。"
                     }
                 )
-                Button(
-                    onClick = vm::testBilibiliVideo,
-                    enabled = !state.monitoring && BilibiliVideo.normalizeBvid(state.bilibiliBvid) != null,
-                ) { Text("测试打开视频") }
             }
             Button(onClick = {
                 val permissions = missingMonitoringPermissions(context, state.heartRateTransport)

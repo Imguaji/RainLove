@@ -34,4 +34,5 @@ object BilibiliVideo {
 enum class TriggerTarget {
     LOCAL_MUSIC,
     BILIBILI_VIDEO,
+    NETEASE_MUSIC,
 }

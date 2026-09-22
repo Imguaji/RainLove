@@ -15,6 +15,7 @@ import android.provider.Settings
 import androidx.core.app.NotificationCompat
 import com.rainlove.app.media.MusicPlayer
 import com.rainlove.app.media.BilibiliVideo
+import com.rainlove.app.media.NeteaseMusic
 import com.rainlove.app.media.TriggerTarget
 import com.rainlove.app.sensor.BleHeartRateDevice
 import com.rainlove.app.sensor.BleHeartRateSource
@@ -32,7 +33,9 @@ class HeartRateForegroundService : Service(), HeartRateSource.Listener {
     private var triggerTarget = TriggerTarget.LOCAL_MUSIC
     private var bilibiliBvid = ""
     private var bilibiliAutoPlay = true
-    private var bilibiliBackgroundDirect = false
+    private var neteaseSongId = ""
+    private var neteaseAutoPlay = true
+    private var externalBackgroundDirect = false
     private val mainHandler = Handler(Looper.getMainLooper())
     private var lastHeartRateBpm: Int? = null
     private val stateAdvanceRunnable = Runnable { lastHeartRateBpm?.let(::processHeartRate) }
@@ -102,10 +105,13 @@ class HeartRateForegroundService : Service(), HeartRateSource.Listener {
             ?: TriggerTarget.LOCAL_MUSIC
         bilibiliBvid = preferences.getString(RainLovePreferences.BILIBILI_BVID, "") ?: ""
         bilibiliAutoPlay = preferences.getBoolean(RainLovePreferences.BILIBILI_AUTO_PLAY, true)
-        bilibiliBackgroundDirect = preferences.getBoolean(
-            RainLovePreferences.BILIBILI_BACKGROUND_DIRECT,
-            false,
-        )
+        neteaseSongId = preferences.getString(RainLovePreferences.NETEASE_SONG_ID, "") ?: ""
+        neteaseAutoPlay = preferences.getBoolean(RainLovePreferences.NETEASE_AUTO_PLAY, true)
+        externalBackgroundDirect = if (preferences.contains(RainLovePreferences.EXTERNAL_BACKGROUND_DIRECT)) {
+            preferences.getBoolean(RainLovePreferences.EXTERNAL_BACKGROUND_DIRECT, false)
+        } else {
+            preferences.getBoolean(RainLovePreferences.BILIBILI_BACKGROUND_DIRECT, false)
+        }
         heartRateTransport = preferences.getString(RainLovePreferences.HEART_RATE_TRANSPORT, null)
             ?.let { runCatching { HeartRateTransport.valueOf(it) }.getOrNull() }
             ?: HeartRateTransport.BLE
@@ -143,6 +149,7 @@ class HeartRateForegroundService : Service(), HeartRateSource.Listener {
                         else onStatus("已触发，但尚未选择音乐")
                     }
                     TriggerTarget.BILIBILI_VIDEO -> notifyBilibiliTrigger()
+                    TriggerTarget.NETEASE_MUSIC -> notifyNeteaseTrigger()
                 }
             }
             HeartRateTriggerEngine.Event.StopPlayback -> {
@@ -250,8 +257,7 @@ class HeartRateForegroundService : Service(), HeartRateSource.Listener {
             onStatus("已触发，但 BV 号无效")
             return
         }
-        val canOpenDirectly = isAppVisible ||
-            (bilibiliBackgroundDirect && Settings.canDrawOverlays(this))
+        val canOpenDirectly = canOpenExternalDirectly()
         if (canOpenDirectly && BilibiliVideo.open(this, bvid, bilibiliAutoPlay)) {
             getSystemService(NotificationManager::class.java).cancel(TRIGGER_NOTIFICATION_ID)
             onStatus("达到触发条件，正在打开 B 站视频…")
@@ -278,6 +284,42 @@ class HeartRateForegroundService : Service(), HeartRateSource.Listener {
         getSystemService(NotificationManager::class.java).notify(TRIGGER_NOTIFICATION_ID, notification)
         onStatus("达到触发条件；应用在后台，请点击通知打开 B 站视频")
     }
+
+    private fun notifyNeteaseTrigger() {
+        val songId = NeteaseMusic.normalizeSongId(neteaseSongId)
+        if (songId == null) {
+            onStatus("已触发，但网易云歌曲 ID 无效")
+            return
+        }
+        if (canOpenExternalDirectly() && NeteaseMusic.open(this, songId, neteaseAutoPlay)) {
+            getSystemService(NotificationManager::class.java).cancel(TRIGGER_NOTIFICATION_ID)
+            onStatus("达到触发条件，正在打开网易云歌曲…")
+            return
+        }
+        val openSong = PendingIntent.getActivity(
+            this,
+            3,
+            Intent(this, NeteaseLaunchActivity::class.java).apply {
+                putExtra(NeteaseLaunchActivity.EXTRA_SONG_ID, songId)
+                putExtra(NeteaseLaunchActivity.EXTRA_AUTO_PLAY, neteaseAutoPlay)
+            },
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
+        )
+        val notification = NotificationCompat.Builder(this, TRIGGER_NOTIFICATION_CHANNEL_ID)
+            .setSmallIcon(android.R.drawable.ic_media_play)
+            .setContentTitle("心率已达到触发条件")
+            .setContentText("点击打开网易云歌曲 $songId")
+            .setContentIntent(openSong)
+            .setAutoCancel(true)
+            .setPriority(NotificationCompat.PRIORITY_HIGH)
+            .addAction(android.R.drawable.ic_media_play, "打开歌曲", openSong)
+            .build()
+        getSystemService(NotificationManager::class.java).notify(TRIGGER_NOTIFICATION_ID, notification)
+        onStatus("达到触发条件；应用在后台，请点击通知打开网易云歌曲")
+    }
+
+    private fun canOpenExternalDirectly(): Boolean = isAppVisible ||
+        (externalBackgroundDirect && Settings.canDrawOverlays(this))
 
     private fun buildNotification(content: String): Notification {
         val openIntent = PendingIntent.getActivity(

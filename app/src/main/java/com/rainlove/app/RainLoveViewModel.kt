@@ -15,6 +15,7 @@ import androidx.core.content.ContextCompat
 import androidx.lifecycle.AndroidViewModel
 import com.rainlove.app.media.MusicPlayer
 import com.rainlove.app.media.BilibiliVideo
+import com.rainlove.app.media.NeteaseMusic
 import com.rainlove.app.media.TriggerTarget
 import com.rainlove.app.sensor.BleHeartRateDevice
 import com.rainlove.app.sensor.BleHeartRateScanner
@@ -38,7 +39,9 @@ data class RainLoveUiState(
     val triggerTarget: TriggerTarget = TriggerTarget.LOCAL_MUSIC,
     val bilibiliBvid: String = "",
     val bilibiliAutoPlay: Boolean = true,
-    val bilibiliBackgroundDirect: Boolean = false,
+    val neteaseSongId: String = "",
+    val neteaseAutoPlay: Boolean = true,
+    val externalBackgroundDirect: Boolean = false,
     val demoMode: Boolean = true,
     val heartRateTransport: HeartRateTransport = HeartRateTransport.BLE,
     val monitoring: Boolean = false,
@@ -129,6 +132,12 @@ class RainLoveViewModel(application: Application) : AndroidViewModel(application
             BilibiliVideo.normalizeBvid(_ui.value.bilibiliBvid) == null
         ) {
             _ui.value = _ui.value.copy(status = "请输入有效的 BV 号")
+            return
+        }
+        if (_ui.value.triggerTarget == TriggerTarget.NETEASE_MUSIC &&
+            NeteaseMusic.normalizeSongId(_ui.value.neteaseSongId) == null
+        ) {
+            _ui.value = _ui.value.copy(status = "请输入有效的网易云歌曲 ID 或链接")
             return
         }
         rebuildEngine()
@@ -325,20 +334,32 @@ class RainLoveViewModel(application: Application) : AndroidViewModel(application
         preferences.edit().putBoolean(RainLovePreferences.BILIBILI_AUTO_PLAY, enabled).apply()
     }
 
-    fun setBilibiliBackgroundDirect(enabled: Boolean) {
+    fun setExternalBackgroundDirect(enabled: Boolean) {
         if (_ui.value.monitoring) return
         _ui.value = _ui.value.copy(
-            bilibiliBackgroundDirect = enabled,
-            status = if (enabled) "已允许后台直接打开 B 站" else _ui.value.status,
+            externalBackgroundDirect = enabled,
+            status = if (enabled) "已允许后台直接打开外部媒体 App" else _ui.value.status,
         )
-        preferences.edit().putBoolean(RainLovePreferences.BILIBILI_BACKGROUND_DIRECT, enabled).apply()
+        preferences.edit().putBoolean(RainLovePreferences.EXTERNAL_BACKGROUND_DIRECT, enabled).apply()
     }
 
-    fun reconcileBilibiliBackgroundDirectPermission(permissionGranted: Boolean) {
-        if (_ui.value.bilibiliBackgroundDirect && !permissionGranted) {
-            _ui.value = _ui.value.copy(bilibiliBackgroundDirect = false)
-            preferences.edit().putBoolean(RainLovePreferences.BILIBILI_BACKGROUND_DIRECT, false).apply()
+    fun reconcileExternalBackgroundDirectPermission(permissionGranted: Boolean) {
+        if (_ui.value.externalBackgroundDirect && !permissionGranted) {
+            _ui.value = _ui.value.copy(externalBackgroundDirect = false)
+            preferences.edit().putBoolean(RainLovePreferences.EXTERNAL_BACKGROUND_DIRECT, false).apply()
         }
+    }
+
+    fun setNeteaseSongId(value: String) {
+        if (_ui.value.monitoring) return
+        _ui.value = _ui.value.copy(neteaseSongId = value)
+        preferences.edit().putString(RainLovePreferences.NETEASE_SONG_ID, value).apply()
+    }
+
+    fun setNeteaseAutoPlay(enabled: Boolean) {
+        if (_ui.value.monitoring) return
+        _ui.value = _ui.value.copy(neteaseAutoPlay = enabled)
+        preferences.edit().putBoolean(RainLovePreferences.NETEASE_AUTO_PLAY, enabled).apply()
     }
 
     fun testBilibiliVideo() {
@@ -348,6 +369,18 @@ class RainLoveViewModel(application: Application) : AndroidViewModel(application
                 bvid == null -> "请输入有效的 BV 号"
                 BilibiliVideo.open(getApplication(), bvid, _ui.value.bilibiliAutoPlay) -> "已打开 $bvid"
                 else -> "无法打开视频链接"
+            }
+        )
+    }
+
+    fun testNeteaseSong() {
+        val songId = NeteaseMusic.normalizeSongId(_ui.value.neteaseSongId)
+        _ui.value = _ui.value.copy(
+            status = when {
+                songId == null -> "请输入有效的网易云歌曲 ID 或链接"
+                NeteaseMusic.open(getApplication(), songId, _ui.value.neteaseAutoPlay) ->
+                    "已打开网易云歌曲 $songId"
+                else -> "无法打开网易云歌曲"
             }
         )
     }
@@ -369,6 +402,18 @@ class RainLoveViewModel(application: Application) : AndroidViewModel(application
                             "达到触发条件，已打开 B 站视频"
                         } else {
                             "已触发，但无法打开 B 站视频"
+                        }
+                    }
+                    TriggerTarget.NETEASE_MUSIC -> {
+                        if (NeteaseMusic.open(
+                                getApplication(),
+                                _ui.value.neteaseSongId,
+                                _ui.value.neteaseAutoPlay,
+                            )
+                        ) {
+                            "达到触发条件，已打开网易云歌曲"
+                        } else {
+                            "已触发，但无法打开网易云歌曲"
                         }
                     }
                 }
@@ -415,10 +460,13 @@ class RainLoveViewModel(application: Application) : AndroidViewModel(application
                 ?: TriggerTarget.LOCAL_MUSIC,
             bilibiliBvid = preferences.getString(RainLovePreferences.BILIBILI_BVID, "") ?: "",
             bilibiliAutoPlay = preferences.getBoolean(RainLovePreferences.BILIBILI_AUTO_PLAY, true),
-            bilibiliBackgroundDirect = preferences.getBoolean(
-                RainLovePreferences.BILIBILI_BACKGROUND_DIRECT,
-                false,
-            ),
+            neteaseSongId = preferences.getString(RainLovePreferences.NETEASE_SONG_ID, "") ?: "",
+            neteaseAutoPlay = preferences.getBoolean(RainLovePreferences.NETEASE_AUTO_PLAY, true),
+            externalBackgroundDirect = if (preferences.contains(RainLovePreferences.EXTERNAL_BACKGROUND_DIRECT)) {
+                preferences.getBoolean(RainLovePreferences.EXTERNAL_BACKGROUND_DIRECT, false)
+            } else {
+                preferences.getBoolean(RainLovePreferences.BILIBILI_BACKGROUND_DIRECT, false)
+            },
             demoMode = preferences.getBoolean(RainLovePreferences.DEMO_MODE, true),
             heartRateTransport = preferences.getString(RainLovePreferences.HEART_RATE_TRANSPORT, null)
                 ?.let { runCatching { HeartRateTransport.valueOf(it) }.getOrNull() }
