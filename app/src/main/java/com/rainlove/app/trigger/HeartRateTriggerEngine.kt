@@ -29,6 +29,11 @@ class HeartRateTriggerEngine(private var config: TriggerConfig = TriggerConfig()
         State.ARMED, State.PLAYING -> null
     }
 
+    fun progress(nowMs: Long): TriggerProgress = TriggerProgress(
+        state = state,
+        deadlineMs = nextTransitionDelayMs(nowMs)?.let { nowMs + it },
+    )
+
     fun onHeartRate(bpm: Int, nowMs: Long): Event? {
         return when (state) {
             State.ARMED -> {

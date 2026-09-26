@@ -22,7 +22,7 @@
     <application
         android:allowBackup="false"
         android:icon="@drawable/ic_launcher"
-        android:label="RainLove"
+        android:label="rainy love"
         android:supportsRtl="true"
         android:theme="@style/Theme.RainLove">
         <activity

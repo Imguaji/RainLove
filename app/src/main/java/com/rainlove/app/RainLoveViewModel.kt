@@ -64,6 +64,7 @@ data class RainLoveUiState(
     val selectedDeviceAddress: String? = null,
     val selectedDeviceName: String? = null,
     val triggerState: HeartRateTriggerEngine.State = HeartRateTriggerEngine.State.ARMED,
+    val triggerDeadlineMs: Long? = null,
     val historyRecords: List<HeartRateRecord> = emptyList(),
     val profileNames: List<String> = emptyList(),
 )
@@ -111,6 +112,11 @@ class RainLoveViewModel(application: Application) : AndroidViewModel(application
                 }
             }
             val address = intent.getStringExtra(HeartRateForegroundService.EXTRA_DEVICE_ADDRESS)
+            if (intent.hasExtra(HeartRateForegroundService.EXTRA_TRIGGER_DEADLINE)) {
+                state = state.copy(triggerDeadlineMs = intent.getLongExtra(
+                    HeartRateForegroundService.EXTRA_TRIGGER_DEADLINE, -1L,
+                ).takeIf { it >= 0 })
+            }
             val name = intent.getStringExtra(HeartRateForegroundService.EXTRA_DEVICE_NAME)
             if (address != null && name != null) {
                 state = state.copy(selectedDeviceAddress = address, selectedDeviceName = name)
@@ -135,6 +141,9 @@ class RainLoveViewModel(application: Application) : AndroidViewModel(application
                 monitoring = true,
                 demoMode = false,
                 status = HeartRateForegroundService.currentStatus,
+                bpm = HeartRateForegroundService.currentBpm ?: _ui.value.bpm,
+                triggerState = HeartRateForegroundService.currentProgress.state,
+                triggerDeadlineMs = HeartRateForegroundService.currentProgress.deadlineMs,
             )
         }
     }
@@ -186,13 +195,13 @@ class RainLoveViewModel(application: Application) : AndroidViewModel(application
         if (_ui.value.demoMode) {
             musicPlayer.pause()
             engine.reset(SystemClock.elapsedRealtime())
-            _ui.value = _ui.value.copy(monitoring = false, status = "已停止", triggerState = engine.state)
+            _ui.value = _ui.value.copy(monitoring = false, status = "已停止", triggerState = engine.state, triggerDeadlineMs = null)
         } else {
             getApplication<Application>().startService(
                 Intent(getApplication(), HeartRateForegroundService::class.java)
                     .setAction(HeartRateForegroundService.ACTION_STOP)
             )
-            _ui.value = _ui.value.copy(monitoring = false, status = "已停止")
+            _ui.value = _ui.value.copy(monitoring = false, status = "已停止", triggerDeadlineMs = null)
         }
     }
 
@@ -599,7 +608,7 @@ class RainLoveViewModel(application: Application) : AndroidViewModel(application
                 runCatching { history.record(timestampMs, bpm, "DEMO") }
             }
         }
-        when (engine.onHeartRate(bpm, SystemClock.elapsedRealtime())) {
+        when (engine.onHeartRate(bpm, nowMs)) {
             HeartRateTriggerEngine.Event.StartPlayback -> {
                 val status = when (_ui.value.triggerTarget) {
                     TriggerTarget.LOCAL_MUSIC -> {
@@ -651,11 +660,16 @@ class RainLoveViewModel(application: Application) : AndroidViewModel(application
             }
             null -> Unit
         }
-        _ui.value = _ui.value.copy(bpm = bpm, triggerState = engine.state)
+        _ui.value = _ui.value.copy(
+            bpm = bpm,
+            triggerState = engine.state,
+            triggerDeadlineMs = engine.progress(nowMs).deadlineMs,
+        )
     }
 
     private fun rebuildEngine() {
         engine = HeartRateTriggerEngine(_ui.value.toTriggerConfig())
+        _ui.value = _ui.value.copy(triggerState = engine.state, triggerDeadlineMs = null)
     }
 
     private fun onMusicEvent(event: MusicPlayer.Event) {

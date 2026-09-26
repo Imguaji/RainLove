@@ -27,6 +27,7 @@ import com.rainlove.app.sensor.HeartRateSource
 import com.rainlove.app.sensor.HeartRateTransport
 import com.rainlove.app.trigger.HeartRateTriggerEngine
 import com.rainlove.app.trigger.TriggerConfig
+import com.rainlove.app.trigger.TriggerProgress
 import java.util.concurrent.Executors
 
 class HeartRateForegroundService : Service(), HeartRateSource.Listener {
@@ -72,6 +73,7 @@ class HeartRateForegroundService : Service(), HeartRateSource.Listener {
         loadSessionSettings()
         lastHeartRateBpm = null
         lastHistorySampleElapsedMs = 0L
+        currentBpm = null
         isRunning = true
         currentStatus = "正在启动心率监测…"
         startForeground(NOTIFICATION_ID, buildNotification("正在启动心率监测…"))
@@ -164,7 +166,7 @@ class HeartRateForegroundService : Service(), HeartRateSource.Listener {
         lastHeartRateBpm = null
         mainHandler.removeCallbacks(stateAdvanceRunnable)
         engine.reset(SystemClock.elapsedRealtime())
-        broadcastState(triggerState = engine.state)
+        broadcastState()
     }
 
     private fun processHeartRate(bpm: Int) {
@@ -187,7 +189,7 @@ class HeartRateForegroundService : Service(), HeartRateSource.Listener {
             }
             null -> Unit
         }
-        broadcastState(bpm = bpm, triggerState = engine.state)
+        broadcastState(bpm = bpm)
         scheduleStateAdvance(nowMs)
     }
 
@@ -206,7 +208,7 @@ class HeartRateForegroundService : Service(), HeartRateSource.Listener {
         if (!isRunning) return
         currentStatus = message
         getSystemService(NotificationManager::class.java).notify(NOTIFICATION_ID, buildNotification(message))
-        broadcastState(monitoring = true, status = message, triggerState = engine.state)
+        broadcastState(monitoring = true, status = message)
     }
 
     override fun onError(message: String) {
@@ -252,7 +254,7 @@ class HeartRateForegroundService : Service(), HeartRateSource.Listener {
         source?.stop()
         musicPlayer.pause()
         engine.reset(SystemClock.elapsedRealtime())
-        broadcastState(monitoring = false, status = status, triggerState = engine.state)
+        broadcastState(monitoring = false, status = status)
         stopForeground(STOP_FOREGROUND_REMOVE)
         stopSelf()
     }
@@ -273,7 +275,7 @@ class HeartRateForegroundService : Service(), HeartRateSource.Listener {
             NOTIFICATION_CHANNEL_ID,
             "心率监测",
             NotificationManager.IMPORTANCE_LOW,
-        ).apply { description = "RainLove 后台心率连接状态" }
+        ).apply { description = "rainy love 后台心率连接状态" }
         getSystemService(NotificationManager::class.java).createNotificationChannel(channel)
         val triggerChannel = NotificationChannel(
             TRIGGER_NOTIFICATION_CHANNEL_ID,
@@ -400,7 +402,7 @@ class HeartRateForegroundService : Service(), HeartRateSource.Listener {
         )
         return NotificationCompat.Builder(this, NOTIFICATION_CHANNEL_ID)
             .setSmallIcon(android.R.drawable.ic_media_play)
-            .setContentTitle("RainLove 正在监测心率")
+            .setContentTitle("rainy love 正在监测心率")
             .setContentText(content)
             .setContentIntent(openIntent)
             .setOngoing(true)
@@ -413,14 +415,16 @@ class HeartRateForegroundService : Service(), HeartRateSource.Listener {
         monitoring: Boolean? = null,
         status: String? = null,
         bpm: Int? = null,
-        triggerState: HeartRateTriggerEngine.State? = null,
         device: BleHeartRateDevice? = null,
     ) {
+        currentProgress = engine.progress(SystemClock.elapsedRealtime())
+        bpm?.let { currentBpm = it }
         sendBroadcast(Intent(ACTION_STATE).setPackage(packageName).apply {
             monitoring?.let { putExtra(EXTRA_MONITORING, it) }
             status?.let { putExtra(EXTRA_STATUS, it) }
             bpm?.let { putExtra(EXTRA_BPM, it) }
-            triggerState?.let { putExtra(EXTRA_TRIGGER_STATE, it.name) }
+            putExtra(EXTRA_TRIGGER_STATE, currentProgress.state.name)
+            putExtra(EXTRA_TRIGGER_DEADLINE, currentProgress.deadlineMs ?: -1L)
             device?.let {
                 putExtra(EXTRA_DEVICE_ADDRESS, it.address)
                 putExtra(EXTRA_DEVICE_NAME, it.name)
@@ -429,6 +433,14 @@ class HeartRateForegroundService : Service(), HeartRateSource.Listener {
     }
 
     companion object {
+        @Volatile
+        var currentProgress: TriggerProgress = TriggerProgress()
+            private set
+
+        @Volatile
+        var currentBpm: Int? = null
+            private set
+
         @Volatile
         var isRunning: Boolean = false
             private set
@@ -451,6 +463,7 @@ class HeartRateForegroundService : Service(), HeartRateSource.Listener {
         const val EXTRA_STATUS = "status"
         const val EXTRA_BPM = "bpm"
         const val EXTRA_TRIGGER_STATE = "trigger_state"
+        const val EXTRA_TRIGGER_DEADLINE = "trigger_deadline"
         const val EXTRA_DEVICE_ADDRESS = "device_address"
         const val EXTRA_DEVICE_NAME = "device_name"
         private const val NOTIFICATION_CHANNEL_ID = "heart_rate_monitoring"

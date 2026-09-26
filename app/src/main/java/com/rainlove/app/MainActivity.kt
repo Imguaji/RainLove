@@ -6,6 +6,7 @@ import android.content.pm.PackageManager
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
+import android.os.SystemClock
 import android.provider.Settings
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.rememberLauncherForActivityResult
@@ -34,6 +35,8 @@ import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -47,6 +50,8 @@ import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.core.content.ContextCompat
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.repeatOnLifecycle
 import com.rainlove.app.media.BilibiliVideo
 import com.rainlove.app.history.HeartRateRecord
 import com.rainlove.app.media.NeteaseMusic
@@ -54,13 +59,16 @@ import com.rainlove.app.media.ExternalLink
 import com.rainlove.app.media.TriggerTarget
 import com.rainlove.app.profiles.TriggerProfileStore
 import com.rainlove.app.sensor.HeartRateTransport
+import com.rainlove.app.trigger.HeartRateTriggerEngine
+import com.rainlove.app.trigger.TriggerProgress
+import kotlinx.coroutines.delay
 
 class MainActivity : ComponentActivity() {
     private val viewModel: RainLoveViewModel by viewModels()
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        setContent { MaterialTheme { RainLoveScreen(viewModel) } }
+        setContent { MaterialTheme { RainLoveScreen(viewModel, lifecycle) } }
     }
 
     override fun onStart() {
@@ -76,8 +84,22 @@ class MainActivity : ComponentActivity() {
 }
 
 @Composable
-private fun RainLoveScreen(vm: RainLoveViewModel) {
+private fun RainLoveScreen(vm: RainLoveViewModel, lifecycle: Lifecycle) {
     val state by vm.ui.collectAsState()
+    var countdownNowMs by remember { mutableLongStateOf(SystemClock.elapsedRealtime()) }
+    LaunchedEffect(state.triggerDeadlineMs, state.monitoring, lifecycle) {
+        if (!state.monitoring) return@LaunchedEffect
+        val deadline = state.triggerDeadlineMs ?: return@LaunchedEffect
+        lifecycle.repeatOnLifecycle(Lifecycle.State.STARTED) {
+            do {
+                countdownNowMs = SystemClock.elapsedRealtime()
+                if (countdownNowMs >= deadline) break
+                delay(250L)
+            } while (true)
+        }
+    }
+    val progress = TriggerProgress(state.triggerState, state.triggerDeadlineMs)
+    val remainingSeconds = progress.remainingSeconds(countdownNowMs)
     val context = androidx.compose.ui.platform.LocalContext.current
     var pendingBluetoothAction by remember { mutableStateOf(BluetoothAction.NONE) }
     var showHistory by remember { mutableStateOf(false) }
@@ -127,7 +149,7 @@ private fun RainLoveScreen(vm: RainLoveViewModel) {
         AlertDialog(
             onDismissRequest = { pendingClearHistory = false },
             title = { Text("清空心率历史？") },
-            text = { Text("将永久删除 RainLove 保存的全部本地心率记录。此前导出的 CSV 文件不受影响。") },
+            text = { Text("将永久删除 rainy love 保存的全部本地心率记录。此前导出的 CSV 文件不受影响。") },
             confirmButton = {
                 TextButton(onClick = {
                     vm.clearHistory()
@@ -151,9 +173,19 @@ private fun RainLoveScreen(vm: RainLoveViewModel) {
             verticalArrangement = Arrangement.spacedBy(18.dp),
             horizontalAlignment = Alignment.CenterHorizontally,
         ) {
-            Text("RainLove", style = MaterialTheme.typography.headlineMedium)
+            Text("rainy love", style = MaterialTheme.typography.headlineMedium)
             Text("${state.bpm}", fontSize = 72.sp)
-            Text("BPM · ${state.triggerState.name}")
+            Text("BPM · ${if (state.monitoring) progress.label else "未监测"}")
+            if (state.monitoring) {
+                val waitText = when (state.triggerState) {
+                    HeartRateTriggerEngine.State.ARMED -> "心率达到 ${state.triggerBpm} BPM 并保持 ${state.triggerSeconds} 秒后触发"
+                    HeartRateTriggerEngine.State.HIGH_PENDING -> "继续保持 ≥ ${state.triggerBpm} BPM，还需 ${remainingSeconds ?: "…"} 秒；低于阈值会重新计时"
+                    HeartRateTriggerEngine.State.PLAYING -> "触发条件已满足；实际播放或打开结果见下方状态"
+                    HeartRateTriggerEngine.State.RECOVERY_PENDING -> "继续保持 ≤ ${state.recoveryBpm} BPM，还需 ${remainingSeconds ?: "…"} 秒后进入冷却"
+                    HeartRateTriggerEngine.State.COOLDOWN -> "还需 ${remainingSeconds ?: "…"} 秒重新允许触发"
+                }
+                Text(waitText)
+            }
             Text(state.status)
 
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
@@ -396,12 +428,12 @@ private fun RainLoveScreen(vm: RainLoveViewModel) {
                         enabled = !state.monitoring,
                     )
                 }
-                Text("开启后需授予“显示在其他应用上层”权限；RainLove 不会显示悬浮窗，只用该权限请求后台直接跳转。")
+                Text("开启后需授予“显示在其他应用上层”权限；rainy love 不会显示悬浮窗，只用该权限请求后台直接跳转。")
                 Text(
                     if (state.externalBackgroundDirect) {
-                        "RainLove 在前台或后台触发时都会尝试直接打开目标；权限失效时自动降级为通知。"
+                        "rainy love 在前台或后台触发时都会尝试直接打开目标；权限失效时自动降级为通知。"
                     } else {
-                        "RainLove 在前台时直接打开目标；后台受 Android 限制，需点击通知。"
+                        "rainy love 在前台时直接打开目标；后台受 Android 限制，需点击通知。"
                     }
                 )
             }
@@ -424,7 +456,7 @@ private fun RainLoveScreen(vm: RainLoveViewModel) {
                 Text("最近 ${state.historyRecords.size} 个采样点（最多显示 300 个）")
                 HeartRateHistoryChart(state.historyRecords)
                 Button(onClick = vm::refreshHistory) { Text("刷新历史") }
-                Button(onClick = { historyExportLauncher.launch("rainlove-heart-rate.csv") }) {
+                Button(onClick = { historyExportLauncher.launch("rainy-love-heart-rate.csv") }) {
                     Text("导出全部心率记录 CSV")
                 }
                 TextButton(onClick = { pendingClearHistory = true }, enabled = !state.monitoring) {
