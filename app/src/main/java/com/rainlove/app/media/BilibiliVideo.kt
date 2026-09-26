@@ -35,5 +35,13 @@ enum class TriggerTarget {
     LOCAL_MUSIC,
     BILIBILI_VIDEO,
     NETEASE_MUSIC,
-    EXTERNAL_LINK,
+    EXTERNAL_LINK;
+
+    val label: String
+        get() = when (this) {
+            LOCAL_MUSIC -> "本地音乐"
+            BILIBILI_VIDEO -> "哔哩哔哩视频"
+            NETEASE_MUSIC -> "网易云歌曲"
+            EXTERNAL_LINK -> "外部媒体链接"
+        }
 }

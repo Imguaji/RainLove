@@ -17,6 +17,9 @@ import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.rainlove.app.history.HeartRateHistory
 import com.rainlove.app.history.HeartRateRecord
+import com.rainlove.app.history.TriggerEventLog
+import com.rainlove.app.history.TriggerEventRecord
+import com.rainlove.app.history.TriggerEventType
 import com.rainlove.app.media.MusicPlayer
 import com.rainlove.app.media.BilibiliVideo
 import com.rainlove.app.media.NeteaseMusic
@@ -29,6 +32,8 @@ import com.rainlove.app.sensor.BleHeartRateScanner
 import com.rainlove.app.sensor.HeartRateTransport
 import com.rainlove.app.sensor.mergeHeartRateDevices
 import com.rainlove.app.trigger.HeartRateTriggerEngine
+import com.rainlove.app.trigger.HeartRateMonitor
+import com.rainlove.app.trigger.TriggerProgress
 import com.rainlove.app.trigger.TriggerConfig
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -65,6 +70,10 @@ data class RainLoveUiState(
     val selectedDeviceName: String? = null,
     val triggerState: HeartRateTriggerEngine.State = HeartRateTriggerEngine.State.ARMED,
     val triggerDeadlineMs: Long? = null,
+    val signal: HeartRateMonitor.Signal = HeartRateMonitor.Signal.WAITING,
+    val eventRecords: List<TriggerEventRecord> = emptyList(),
+    val eventLogStatus: String = "",
+    val eventLogBusy: Boolean = false,
     val historyRecords: List<HeartRateRecord> = emptyList(),
     val profileNames: List<String> = emptyList(),
 )
@@ -74,6 +83,8 @@ class RainLoveViewModel(application: Application) : AndroidViewModel(application
     private val bluetoothManager = application.getSystemService(BluetoothManager::class.java)
     private val _ui = MutableStateFlow(loadState())
     val ui = _ui.asStateFlow()
+    private val eventLog = TriggerEventLog.get(application)
+    private var localPlaybackSource = "TEST"
     private val musicPlayer = MusicPlayer(application, ::onMusicEvent)
     private val history = HeartRateHistory(application)
     private val profileStore = TriggerProfileStore(preferences)
@@ -111,6 +122,11 @@ class RainLoveViewModel(application: Application) : AndroidViewModel(application
                     state = state.copy(triggerState = it)
                 }
             }
+            intent.getStringExtra(HeartRateForegroundService.EXTRA_SIGNAL)?.let { rawSignal ->
+                runCatching { HeartRateMonitor.Signal.valueOf(rawSignal) }.getOrNull()?.let {
+                    state = state.copy(signal = it)
+                }
+            }
             val address = intent.getStringExtra(HeartRateForegroundService.EXTRA_DEVICE_ADDRESS)
             if (intent.hasExtra(HeartRateForegroundService.EXTRA_TRIGGER_DEADLINE)) {
                 state = state.copy(triggerDeadlineMs = intent.getLongExtra(
@@ -144,6 +160,7 @@ class RainLoveViewModel(application: Application) : AndroidViewModel(application
                 bpm = HeartRateForegroundService.currentBpm ?: _ui.value.bpm,
                 triggerState = HeartRateForegroundService.currentProgress.state,
                 triggerDeadlineMs = HeartRateForegroundService.currentProgress.deadlineMs,
+                signal = HeartRateForegroundService.currentSignal,
             )
         }
     }
@@ -179,9 +196,11 @@ class RainLoveViewModel(application: Application) : AndroidViewModel(application
         if (_ui.value.demoMode) {
             lastDemoHistorySampleElapsedMs = 0L
             _ui.value = _ui.value.copy(monitoring = true, status = "Demo 模式运行中")
+            localPlaybackSource = "DEMO"
+            recordEvent(TriggerEventType.SESSION_STARTED, "Demo 开始监测")
             startDemoTicker()
         } else {
-            _ui.value = _ui.value.copy(monitoring = true, status = "正在启动后台监测…")
+            _ui.value = _ui.value.copy(monitoring = true, status = "正在启动后台监测…", signal = HeartRateMonitor.Signal.WAITING)
             ContextCompat.startForegroundService(
                 getApplication(),
                 Intent(getApplication(), HeartRateForegroundService::class.java)
@@ -193,6 +212,7 @@ class RainLoveViewModel(application: Application) : AndroidViewModel(application
     private fun stop() {
         stopDemoTicker()
         if (_ui.value.demoMode) {
+            recordEvent(TriggerEventType.SESSION_STOPPED, "手动停止 Demo 监测")
             musicPlayer.pause()
             engine.reset(SystemClock.elapsedRealtime())
             _ui.value = _ui.value.copy(monitoring = false, status = "已停止", triggerState = engine.state, triggerDeadlineMs = null)
@@ -208,7 +228,10 @@ class RainLoveViewModel(application: Application) : AndroidViewModel(application
     fun setDemoMode(enabled: Boolean) {
         if (_ui.value.monitoring) stop()
         if (enabled) stopDeviceScan()
-        _ui.value = _ui.value.copy(demoMode = enabled)
+        _ui.value = _ui.value.copy(
+            demoMode = enabled,
+            bpm = if (enabled) _ui.value.bpm.takeIf { it in 40..200 } ?: 72 else _ui.value.bpm,
+        )
         preferences.edit().putBoolean(RainLovePreferences.DEMO_MODE, enabled).apply()
     }
 
@@ -325,6 +348,53 @@ class RainLoveViewModel(application: Application) : AndroidViewModel(application
         viewModelScope.launch {
             val records = withContext(Dispatchers.IO) { history.latest() }
             _ui.value = _ui.value.copy(historyRecords = records)
+        }
+    }
+
+    fun refreshEventLog() {
+        if (_ui.value.eventLogBusy) return
+        _ui.value = _ui.value.copy(eventLogBusy = true)
+        viewModelScope.launch {
+            runCatching { eventLog.latest() }.fold(
+                onSuccess = { records -> _ui.value = _ui.value.copy(
+                    eventRecords = records, eventLogStatus = "已更新 ${records.size} 条事件", eventLogBusy = false,
+                ) },
+                onFailure = { _ui.value = _ui.value.copy(eventLogStatus = "读取事件日志失败", eventLogBusy = false) },
+            )
+        }
+    }
+
+    fun exportEventLog(uri: Uri) {
+        if (_ui.value.eventLogBusy) return
+        _ui.value = _ui.value.copy(eventLogBusy = true)
+        viewModelScope.launch {
+            val result = runCatching {
+                eventLog.exportCsv {
+                    getApplication<Application>().contentResolver.openOutputStream(uri)
+                        ?: error("无法创建导出文件")
+                }
+            }
+            _ui.value = _ui.value.copy(
+                eventLogBusy = false,
+                eventLogStatus = if (result.isSuccess) "事件日志已导出为 CSV"
+                else "导出失败：${result.exceptionOrNull()?.message ?: "未知错误"}",
+            )
+        }
+    }
+
+    fun clearEventLog() {
+        if (_ui.value.monitoring || HeartRateForegroundService.isRunning || _ui.value.musicPlaying || _ui.value.eventLogBusy) {
+            _ui.value = _ui.value.copy(eventLogStatus = "请先停止监测和测试播放，再清空日志")
+            return
+        }
+        _ui.value = _ui.value.copy(eventLogBusy = true)
+        viewModelScope.launch {
+            runCatching { eventLog.clear() }.fold(
+                onSuccess = { count -> _ui.value = _ui.value.copy(
+                    eventRecords = emptyList(), eventLogStatus = "已清空 $count 条事件日志", eventLogBusy = false,
+                ) },
+                onFailure = { _ui.value = _ui.value.copy(eventLogStatus = "清空事件日志失败", eventLogBusy = false) },
+            )
         }
     }
 
@@ -487,6 +557,7 @@ class RainLoveViewModel(application: Application) : AndroidViewModel(application
             musicPlayer.pause()
             _ui.value = _ui.value.copy(status = "已停止测试播放")
         } else {
+            localPlaybackSource = "TEST"
             val status = if (musicPlayer.play()) {
                 "正在启动测试播放…"
             } else {
@@ -608,8 +679,15 @@ class RainLoveViewModel(application: Application) : AndroidViewModel(application
                 runCatching { history.record(timestampMs, bpm, "DEMO") }
             }
         }
-        when (engine.onHeartRate(bpm, nowMs)) {
+        val previousState = engine.state
+        val playbackEvent = engine.onHeartRate(bpm, nowMs)
+        if (engine.state != previousState) recordEvent(
+            TriggerEventType.STATE_CHANGED,
+            "${TriggerProgress(previousState).label} → ${TriggerProgress(engine.state).label}",
+        )
+        when (playbackEvent) {
             HeartRateTriggerEngine.Event.StartPlayback -> {
+                recordEvent(TriggerEventType.TRIGGER_REQUEST, "达到触发条件，执行${_ui.value.triggerTarget.label}")
                 val status = when (_ui.value.triggerTarget) {
                     TriggerTarget.LOCAL_MUSIC -> {
                         if (musicPlayer.play()) "达到触发条件，正在启动音乐…" else "已触发，但尚未选择音乐"
@@ -653,10 +731,12 @@ class RainLoveViewModel(application: Application) : AndroidViewModel(application
                     }
                 }
                 _ui.value = _ui.value.copy(status = status)
+                recordEvent(TriggerEventType.STATUS, status)
             }
             HeartRateTriggerEngine.Event.StopPlayback -> {
                 if (_ui.value.triggerTarget == TriggerTarget.LOCAL_MUSIC) musicPlayer.pause()
                 _ui.value = _ui.value.copy(status = "心率已恢复，进入冷却")
+                recordEvent(TriggerEventType.STATUS, "心率已恢复，进入冷却")
             }
             null -> Unit
         }
@@ -673,6 +753,13 @@ class RainLoveViewModel(application: Application) : AndroidViewModel(application
     }
 
     private fun onMusicEvent(event: MusicPlayer.Event) {
+        when (event) {
+            MusicPlayer.Event.Started -> recordEvent(TriggerEventType.PLAYBACK_STARTED, "本地音乐已开始播放", localPlaybackSource)
+            MusicPlayer.Event.Stopped -> if (_ui.value.musicPlaying) {
+                recordEvent(TriggerEventType.PLAYBACK_STOPPED, "本地音乐已暂停或结束", localPlaybackSource)
+            }
+            is MusicPlayer.Event.Error -> recordEvent(TriggerEventType.PLAYBACK_ERROR, "本地音乐播放失败：${event.detail}", localPlaybackSource)
+        }
         _ui.value = when (event) {
             MusicPlayer.Event.Started -> _ui.value.copy(
                 musicPlaying = true,
@@ -684,6 +771,15 @@ class RainLoveViewModel(application: Application) : AndroidViewModel(application
                 status = "音乐播放失败：${event.detail}，请重新选择文件",
             )
         }
+    }
+
+    private fun recordEvent(type: TriggerEventType, message: String, source: String? = null) {
+        val state = _ui.value
+        eventLog.record(TriggerEventRecord(
+            System.currentTimeMillis(),
+            source ?: if (state.demoMode && state.monitoring) "DEMO" else "TEST",
+            type, message, if (state.demoMode && state.monitoring) state.bpm else null,
+        ))
     }
 
     private fun loadState(): RainLoveUiState {

@@ -15,6 +15,9 @@ import android.provider.Settings
 import android.util.Log
 import androidx.core.app.NotificationCompat
 import com.rainlove.app.history.HeartRateHistory
+import com.rainlove.app.history.TriggerEventLog
+import com.rainlove.app.history.TriggerEventRecord
+import com.rainlove.app.history.TriggerEventType
 import com.rainlove.app.media.MusicPlayer
 import com.rainlove.app.media.BilibiliVideo
 import com.rainlove.app.media.NeteaseMusic
@@ -26,6 +29,7 @@ import com.rainlove.app.sensor.AntPlusHeartRateSource
 import com.rainlove.app.sensor.HeartRateSource
 import com.rainlove.app.sensor.HeartRateTransport
 import com.rainlove.app.trigger.HeartRateTriggerEngine
+import com.rainlove.app.trigger.HeartRateMonitor
 import com.rainlove.app.trigger.TriggerConfig
 import com.rainlove.app.trigger.TriggerProgress
 import java.util.concurrent.Executors
@@ -33,11 +37,13 @@ import java.util.concurrent.Executors
 class HeartRateForegroundService : Service(), HeartRateSource.Listener {
     private lateinit var musicPlayer: MusicPlayer
     private lateinit var history: HeartRateHistory
+    private lateinit var eventLog: TriggerEventLog
+    private var localMusicWasPlaying = false
     private val historyExecutor = Executors.newSingleThreadExecutor()
     private var lastHistorySampleElapsedMs = 0L
     private var heartRateSource: HeartRateSource? = null
     private var heartRateTransport = HeartRateTransport.BLE
-    private var engine = HeartRateTriggerEngine()
+    private var monitor = HeartRateMonitor()
     private var triggerTarget = TriggerTarget.LOCAL_MUSIC
     private var bilibiliBvid = ""
     private var bilibiliAutoPlay = true
@@ -48,11 +54,15 @@ class HeartRateForegroundService : Service(), HeartRateSource.Listener {
     private var externalAutoPlay = false
     private var externalBackgroundDirect = false
     private val mainHandler = Handler(Looper.getMainLooper())
-    private var lastHeartRateBpm: Int? = null
-    private val stateAdvanceRunnable = Runnable { lastHeartRateBpm?.let(::processHeartRate) }
+    private val stateAdvanceRunnable = Runnable {
+        if (isRunning) {
+            processMonitorEvents(monitor.onTimer(SystemClock.elapsedRealtime()))
+        }
+    }
 
     override fun onCreate() {
         super.onCreate()
+        eventLog = TriggerEventLog.get(this)
         musicPlayer = MusicPlayer(this, ::onMusicEvent)
         history = HeartRateHistory(this)
         createNotificationChannel()
@@ -71,12 +81,13 @@ class HeartRateForegroundService : Service(), HeartRateSource.Listener {
     private fun startMonitoring() {
         if (heartRateSource != null) return
         loadSessionSettings()
-        lastHeartRateBpm = null
+        mainHandler.removeCallbacks(stateAdvanceRunnable)
         lastHistorySampleElapsedMs = 0L
         currentBpm = null
         isRunning = true
         currentStatus = "正在启动心率监测…"
         startForeground(NOTIFICATION_ID, buildNotification("正在启动心率监测…"))
+        recordEvent(TriggerEventType.SESSION_STARTED, "开始监测；心率数据有效期 ${HeartRateMonitor.STALE_AFTER_MS / 1_000} 秒")
         getSharedPreferences(RainLovePreferences.NAME, MODE_PRIVATE).edit()
             .putBoolean(RainLovePreferences.MONITORING_DESIRED, true)
             .commit()
@@ -99,13 +110,14 @@ class HeartRateForegroundService : Service(), HeartRateSource.Listener {
                 )
             }
             HeartRateTransport.ANT_PLUS -> AntPlusHeartRateSource(this)
-        }.also { it.start(this) }
+        }
+        heartRateSource?.start(this)
     }
 
     private fun loadSessionSettings() {
         val preferences = getSharedPreferences(RainLovePreferences.NAME, MODE_PRIVATE)
         val triggerBpm = preferences.getInt(RainLovePreferences.TRIGGER_BPM, 120).coerceIn(80, 200)
-        engine = HeartRateTriggerEngine(
+        monitor = HeartRateMonitor(
             TriggerConfig(
                 triggerBpm = triggerBpm,
                 triggerDurationMs = preferences.getInt(RainLovePreferences.TRIGGER_SECONDS, 5).coerceIn(1, 30) * 1_000L,
@@ -142,8 +154,7 @@ class HeartRateForegroundService : Service(), HeartRateSource.Listener {
             mainHandler.post { onHeartRate(bpm) }
             return
         }
-        if (!isRunning) return
-        lastHeartRateBpm = bpm
+        if (!isRunning || bpm !in 1..255) return
         val nowMs = SystemClock.elapsedRealtime()
         if (lastHistorySampleElapsedMs == 0L || nowMs - lastHistorySampleElapsedMs >= 1_000L) {
             lastHistorySampleElapsedMs = nowMs
@@ -154,7 +165,7 @@ class HeartRateForegroundService : Service(), HeartRateSource.Listener {
                     .onFailure { Log.w("RainLoveHistory", "Failed to store heart rate sample", it) }
             }
         }
-        processHeartRate(bpm)
+        processMonitorEvents(monitor.onSample(bpm, nowMs))
     }
 
     override fun onConnectionChanged(connected: Boolean) {
@@ -163,16 +174,39 @@ class HeartRateForegroundService : Service(), HeartRateSource.Listener {
             return
         }
         if (connected || !isRunning) return
-        lastHeartRateBpm = null
-        mainHandler.removeCallbacks(stateAdvanceRunnable)
-        engine.reset(SystemClock.elapsedRealtime())
-        broadcastState()
+        processMonitorEvents(monitor.disconnect(SystemClock.elapsedRealtime()))
     }
 
-    private fun processHeartRate(bpm: Int) {
-        val nowMs = SystemClock.elapsedRealtime()
-        when (engine.onHeartRate(bpm, nowMs)) {
+    private fun processMonitorEvents(events: List<HeartRateMonitor.Event>) {
+        events.forEach { event ->
+            when (event) {
+                is HeartRateMonitor.Event.SignalLost -> {
+                    musicPlayer.pause()
+                    val message = when (event.reason) {
+                        HeartRateMonitor.LossReason.TIMEOUT -> "心率数据已过期：${HeartRateMonitor.STALE_AFTER_MS / 1_000} 秒未更新；已暂停本地音乐，等待新心率"
+                        HeartRateMonitor.LossReason.DISCONNECTED -> "心率连接已断开；已暂停本地音乐，等待重新连接"
+                    }
+                    publishStatus(message, TriggerEventType.SIGNAL_LOST)
+                }
+                is HeartRateMonitor.Event.SignalAvailable -> publishStatus(
+                    if (event.restored) "心率数据已恢复，重新计时" else "已收到有效心率，开始判断触发条件",
+                    TriggerEventType.SIGNAL_AVAILABLE,
+                )
+                is HeartRateMonitor.Event.StateChanged -> recordEvent(
+                    TriggerEventType.STATE_CHANGED,
+                    "${TriggerProgress(event.before).label} → ${TriggerProgress(event.after).label}",
+                )
+                is HeartRateMonitor.Event.Playback -> handlePlaybackEvent(event.event)
+            }
+        }
+        broadcastState()
+        scheduleStateAdvance(SystemClock.elapsedRealtime())
+    }
+
+    private fun handlePlaybackEvent(event: HeartRateTriggerEngine.Event) {
+        when (event) {
             HeartRateTriggerEngine.Event.StartPlayback -> {
+                recordEvent(TriggerEventType.TRIGGER_REQUEST, "达到触发条件，执行${triggerTarget.label}")
                 when (triggerTarget) {
                     TriggerTarget.LOCAL_MUSIC -> {
                         if (musicPlayer.play()) onStatus("达到触发条件，正在启动音乐…")
@@ -187,15 +221,12 @@ class HeartRateForegroundService : Service(), HeartRateSource.Listener {
                 if (triggerTarget == TriggerTarget.LOCAL_MUSIC) musicPlayer.pause()
                 onStatus("心率已恢复，进入冷却")
             }
-            null -> Unit
         }
-        broadcastState(bpm = bpm)
-        scheduleStateAdvance(nowMs)
     }
 
     private fun scheduleStateAdvance(nowMs: Long) {
         mainHandler.removeCallbacks(stateAdvanceRunnable)
-        engine.nextTransitionDelayMs(nowMs)?.let { delayMs ->
+        monitor.nextCheckDelayMs(nowMs)?.let { delayMs ->
             mainHandler.postDelayed(stateAdvanceRunnable, delayMs)
         }
     }
@@ -205,7 +236,12 @@ class HeartRateForegroundService : Service(), HeartRateSource.Listener {
             mainHandler.post { onStatus(message) }
             return
         }
+        publishStatus(message)
+    }
+
+    private fun publishStatus(message: String, type: TriggerEventType = TriggerEventType.STATUS) {
         if (!isRunning) return
+        if (message != currentStatus || type != TriggerEventType.STATUS) recordEvent(type, message)
         currentStatus = message
         getSystemService(NotificationManager::class.java).notify(NOTIFICATION_ID, buildNotification(message))
         broadcastState(monitoring = true, status = message)
@@ -221,12 +257,26 @@ class HeartRateForegroundService : Service(), HeartRateSource.Listener {
 
     private fun onMusicEvent(event: MusicPlayer.Event) {
         when (event) {
-            MusicPlayer.Event.Started -> onStatus("本地音乐已开始播放")
-            MusicPlayer.Event.Stopped -> Unit
-            is MusicPlayer.Event.Error -> onStatus(
-                "音乐播放失败：${event.detail}，请重新选择文件"
-            )
+            MusicPlayer.Event.Started -> {
+                localMusicWasPlaying = true
+                publishStatus("本地音乐已开始播放", TriggerEventType.PLAYBACK_STARTED)
+            }
+            MusicPlayer.Event.Stopped -> {
+                if (localMusicWasPlaying) recordEvent(TriggerEventType.PLAYBACK_STOPPED, "本地音乐已暂停或结束")
+                localMusicWasPlaying = false
+            }
+            is MusicPlayer.Event.Error -> {
+                localMusicWasPlaying = false
+                publishStatus("音乐播放失败：${event.detail}，请重新选择文件", TriggerEventType.PLAYBACK_ERROR)
+            }
         }
+    }
+
+    private fun recordEvent(type: TriggerEventType, message: String) {
+        eventLog.record(TriggerEventRecord(
+            System.currentTimeMillis(), heartRateTransport.name, type, message,
+            if (type == TriggerEventType.SIGNAL_LOST) null else monitor.bpm,
+        ))
     }
 
     private fun rememberConnectedDevice(device: BleHeartRateDevice) {
@@ -242,18 +292,18 @@ class HeartRateForegroundService : Service(), HeartRateSource.Listener {
     }
 
     private fun stopMonitoring(status: String) {
+        if (isRunning) recordEvent(TriggerEventType.SESSION_STOPPED, status)
         isRunning = false
         currentStatus = status
         getSharedPreferences(RainLovePreferences.NAME, MODE_PRIVATE).edit()
             .putBoolean(RainLovePreferences.MONITORING_DESIRED, false)
             .commit()
-        lastHeartRateBpm = null
         mainHandler.removeCallbacks(stateAdvanceRunnable)
         val source = heartRateSource
         heartRateSource = null
         source?.stop()
         musicPlayer.pause()
-        engine.reset(SystemClock.elapsedRealtime())
+        monitor.reset(SystemClock.elapsedRealtime())
         broadcastState(monitoring = false, status = status)
         stopForeground(STOP_FOREGROUND_REMOVE)
         stopSelf()
@@ -414,15 +464,16 @@ class HeartRateForegroundService : Service(), HeartRateSource.Listener {
     private fun broadcastState(
         monitoring: Boolean? = null,
         status: String? = null,
-        bpm: Int? = null,
         device: BleHeartRateDevice? = null,
     ) {
-        currentProgress = engine.progress(SystemClock.elapsedRealtime())
-        bpm?.let { currentBpm = it }
+        currentProgress = monitor.progress(SystemClock.elapsedRealtime())
+        currentBpm = monitor.bpm
+        currentSignal = monitor.signal
         sendBroadcast(Intent(ACTION_STATE).setPackage(packageName).apply {
             monitoring?.let { putExtra(EXTRA_MONITORING, it) }
             status?.let { putExtra(EXTRA_STATUS, it) }
-            bpm?.let { putExtra(EXTRA_BPM, it) }
+            putExtra(EXTRA_BPM, currentBpm ?: 0)
+            putExtra(EXTRA_SIGNAL, currentSignal.name)
             putExtra(EXTRA_TRIGGER_STATE, currentProgress.state.name)
             putExtra(EXTRA_TRIGGER_DEADLINE, currentProgress.deadlineMs ?: -1L)
             device?.let {
@@ -433,6 +484,10 @@ class HeartRateForegroundService : Service(), HeartRateSource.Listener {
     }
 
     companion object {
+        @Volatile
+        var currentSignal: HeartRateMonitor.Signal = HeartRateMonitor.Signal.WAITING
+            private set
+
         @Volatile
         var currentProgress: TriggerProgress = TriggerProgress()
             private set
@@ -462,6 +517,7 @@ class HeartRateForegroundService : Service(), HeartRateSource.Listener {
         const val EXTRA_MONITORING = "monitoring"
         const val EXTRA_STATUS = "status"
         const val EXTRA_BPM = "bpm"
+        const val EXTRA_SIGNAL = "signal"
         const val EXTRA_TRIGGER_STATE = "trigger_state"
         const val EXTRA_TRIGGER_DEADLINE = "trigger_deadline"
         const val EXTRA_DEVICE_ADDRESS = "device_address"

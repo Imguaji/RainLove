@@ -20,6 +20,8 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
@@ -54,14 +56,19 @@ import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.repeatOnLifecycle
 import com.rainlove.app.media.BilibiliVideo
 import com.rainlove.app.history.HeartRateRecord
+import com.rainlove.app.history.TriggerEventLog
 import com.rainlove.app.media.NeteaseMusic
 import com.rainlove.app.media.ExternalLink
 import com.rainlove.app.media.TriggerTarget
 import com.rainlove.app.profiles.TriggerProfileStore
 import com.rainlove.app.sensor.HeartRateTransport
 import com.rainlove.app.trigger.HeartRateTriggerEngine
+import com.rainlove.app.trigger.HeartRateMonitor
 import com.rainlove.app.trigger.TriggerProgress
 import kotlinx.coroutines.delay
+import java.time.Instant
+import java.time.ZoneId
+import java.time.format.DateTimeFormatter
 
 class MainActivity : ComponentActivity() {
     private val viewModel: RainLoveViewModel by viewModels()
@@ -104,6 +111,11 @@ private fun RainLoveScreen(vm: RainLoveViewModel, lifecycle: Lifecycle) {
     var pendingBluetoothAction by remember { mutableStateOf(BluetoothAction.NONE) }
     var showHistory by remember { mutableStateOf(false) }
     var pendingClearHistory by remember { mutableStateOf(false) }
+    var showEventLog by remember { mutableStateOf(false) }
+    var pendingClearEvents by remember { mutableStateOf(false) }
+    val eventTimeFormat = remember {
+        DateTimeFormatter.ofPattern("MM-dd HH:mm:ss").withZone(ZoneId.systemDefault())
+    }
     var profileName by remember { mutableStateOf("") }
     var pendingDeleteProfile by remember { mutableStateOf<String?>(null) }
     val permissionLauncher = rememberLauncherForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) {
@@ -123,6 +135,9 @@ private fun RainLoveScreen(vm: RainLoveViewModel, lifecycle: Lifecycle) {
         ActivityResultContracts.CreateDocument("text/csv")
     ) { uri ->
         uri?.let(vm::exportHistory)
+    }
+    val eventExportLauncher = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("text/csv")) { uri ->
+        uri?.let(vm::exportEventLog)
     }
     val overlayPermissionLauncher = rememberLauncherForActivityResult(ActivityResultContracts.StartActivityForResult()) {
         vm.setExternalBackgroundDirect(Settings.canDrawOverlays(context))
@@ -162,6 +177,56 @@ private fun RainLoveScreen(vm: RainLoveViewModel, lifecycle: Lifecycle) {
         )
     }
 
+    if (showEventLog && !pendingClearEvents) {
+        AlertDialog(
+            onDismissRequest = { showEventLog = false },
+            title = { Text("触发事件日志") },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text("本机保留最近 ${TriggerEventLog.MAX_EVENTS} 条，显示最新 100 条。")
+                    Text(state.eventLogStatus)
+                    Row {
+                        TextButton(onClick = vm::refreshEventLog, enabled = !state.eventLogBusy) { Text("刷新") }
+                        TextButton(
+                            onClick = { eventExportLauncher.launch("rainy-love-events.csv") },
+                            enabled = !state.eventLogBusy,
+                        ) { Text("导出 CSV") }
+                    }
+                    LazyColumn(Modifier.fillMaxWidth().height(320.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                        if (state.eventRecords.isEmpty()) item { Text("暂无事件，开始监测后会自动记录。") }
+                        items(state.eventRecords) { event ->
+                            Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                                Text("${eventTimeFormat.format(Instant.ofEpochMilli(event.timestampMs))} · ${event.source}")
+                                Text(event.type.label, style = MaterialTheme.typography.titleSmall)
+                                Text(event.message)
+                                event.bpm?.let { Text("$it BPM", style = MaterialTheme.typography.bodySmall) }
+                            }
+                        }
+                    }
+                }
+            },
+            confirmButton = { TextButton(onClick = { showEventLog = false }) { Text("关闭") } },
+            dismissButton = {
+                TextButton(
+                    onClick = { pendingClearEvents = true },
+                    enabled = !state.monitoring && !state.musicPlaying && !state.eventLogBusy,
+                ) { Text("清空日志") }
+            },
+        )
+    }
+    if (pendingClearEvents) {
+        AlertDialog(
+            onDismissRequest = { pendingClearEvents = false },
+            title = { Text("清空事件日志？") },
+            text = { Text("将永久删除本机触发事件日志；心率历史和已导出的文件保留。") },
+            confirmButton = { TextButton(onClick = {
+                vm.clearEventLog()
+                pendingClearEvents = false
+            }) { Text("清空") } },
+            dismissButton = { TextButton(onClick = { pendingClearEvents = false }) { Text("取消") } },
+        )
+    }
+
     Scaffold { padding ->
         Column(
             modifier = Modifier
@@ -174,9 +239,20 @@ private fun RainLoveScreen(vm: RainLoveViewModel, lifecycle: Lifecycle) {
             horizontalAlignment = Alignment.CenterHorizontally,
         ) {
             Text("rainy love", style = MaterialTheme.typography.headlineMedium)
-            Text("${state.bpm}", fontSize = 72.sp)
-            Text("BPM · ${if (state.monitoring) progress.label else "未监测"}")
-            if (state.monitoring) {
+            val hasCurrentReading = state.demoMode || state.signal == HeartRateMonitor.Signal.LIVE
+            Text(if (hasCurrentReading) "${state.bpm}" else "—", fontSize = 72.sp)
+            val triggerLabel = when {
+                !state.monitoring -> "未监测"
+                !hasCurrentReading -> "等待新心率"
+                else -> progress.label
+            }
+            Text("BPM · $triggerLabel")
+            if (state.monitoring && !hasCurrentReading) {
+                Text(if (state.signal == HeartRateMonitor.Signal.STALE) {
+                    "心率已超过 ${HeartRateMonitor.STALE_AFTER_MS / 1_000} 秒未更新；收到新数据后重新计时。"
+                } else "等待设备发送有效心率。")
+            }
+            if (state.monitoring && hasCurrentReading) {
                 val waitText = when (state.triggerState) {
                     HeartRateTriggerEngine.State.ARMED -> "心率达到 ${state.triggerBpm} BPM 并保持 ${state.triggerSeconds} 秒后触发"
                     HeartRateTriggerEngine.State.HIGH_PENDING -> "继续保持 ≥ ${state.triggerBpm} BPM，还需 ${remainingSeconds ?: "…"} 秒；低于阈值会重新计时"
@@ -187,6 +263,10 @@ private fun RainLoveScreen(vm: RainLoveViewModel, lifecycle: Lifecycle) {
                 Text(waitText)
             }
             Text(state.status)
+            TextButton(onClick = {
+                showEventLog = true
+                vm.refreshEventLog()
+            }) { Text("查看触发事件日志") }
 
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
                 Text("Demo 模拟心率")
