@@ -7,7 +7,6 @@ import android.content.Intent
 import android.content.pm.PackageManager
 import android.os.Build
 import androidx.core.content.ContextCompat
-import com.rainlove.app.sensor.HeartRateTransport
 
 class BootResumeReceiver : BroadcastReceiver() {
     override fun onReceive(context: Context, intent: Intent) {
@@ -17,10 +16,7 @@ class BootResumeReceiver : BroadcastReceiver() {
             !preferences.getBoolean(RainLovePreferences.MONITORING_DESIRED, false) ||
             preferences.getBoolean(RainLovePreferences.DEMO_MODE, true)
         ) return
-        val transport = preferences.getString(RainLovePreferences.HEART_RATE_TRANSPORT, null)
-            ?.let { runCatching { HeartRateTransport.valueOf(it) }.getOrNull() }
-            ?: HeartRateTransport.BLE
-        if (!hasRequiredPermission(context, transport)) return
+        if (!hasRequiredPermission(context)) return
         runCatching {
             ContextCompat.startForegroundService(
                 context,
@@ -30,15 +26,13 @@ class BootResumeReceiver : BroadcastReceiver() {
         }
     }
 
-    private fun hasRequiredPermission(context: Context, transport: HeartRateTransport): Boolean {
+    private fun hasRequiredPermission(context: Context): Boolean {
         fun granted(permission: String) =
             ContextCompat.checkSelfPermission(context, permission) == PackageManager.PERMISSION_GRANTED
-        return when {
-            Build.VERSION.SDK_INT >= 31 && transport == HeartRateTransport.BLE ->
-                granted(Manifest.permission.BLUETOOTH_SCAN) && granted(Manifest.permission.BLUETOOTH_CONNECT)
-            Build.VERSION.SDK_INT >= 31 -> granted(Manifest.permission.BLUETOOTH_CONNECT)
-            transport == HeartRateTransport.BLE -> granted(Manifest.permission.ACCESS_FINE_LOCATION)
-            else -> true
+        return if (Build.VERSION.SDK_INT >= 31) {
+            granted(Manifest.permission.BLUETOOTH_SCAN) && granted(Manifest.permission.BLUETOOTH_CONNECT)
+        } else {
+            granted(Manifest.permission.ACCESS_FINE_LOCATION)
         }
     }
 }

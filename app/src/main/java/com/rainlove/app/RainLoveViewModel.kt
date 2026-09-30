@@ -432,25 +432,8 @@ class RainLoveViewModel(application: Application) : AndroidViewModel(application
         }
     }
 
-    fun setHeartRateTransport(transport: HeartRateTransport) {
-        if (_ui.value.monitoring) return
-        stopDeviceScan()
-        _ui.value = _ui.value.copy(
-            heartRateTransport = transport,
-            status = when (transport) {
-                HeartRateTransport.BLE -> "已选择 Bluetooth LE 心率"
-                HeartRateTransport.ANT_PLUS -> "已选择 ANT+ 心率，将自动连接第一个可用设备"
-            },
-        )
-        preferences.edit()
-            .putString(RainLovePreferences.HEART_RATE_TRANSPORT, transport.name)
-            .apply()
-    }
-
     fun scanForDevices() {
-        if (_ui.value.monitoring || _ui.value.demoMode ||
-            _ui.value.heartRateTransport != HeartRateTransport.BLE
-        ) return
+        if (_ui.value.monitoring || _ui.value.demoMode) return
         val scanner = bluetoothManager?.adapter?.bluetoothLeScanner
         if (scanner == null) {
             _ui.value = _ui.value.copy(status = "蓝牙不可用")

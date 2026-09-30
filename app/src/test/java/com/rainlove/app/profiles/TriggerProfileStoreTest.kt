@@ -31,7 +31,6 @@ class TriggerProfileStoreTest {
             triggerBpm = 130,
             recoveryBpm = 100,
             demoMode = true,
-            transport = HeartRateTransport.ANT_PLUS,
             deviceAddress = null,
             triggerTarget = TriggerTarget.NETEASE_MUSIC,
             neteaseSongId = "123456",
@@ -56,6 +55,18 @@ class TriggerProfileStoreTest {
         assertEquals(listOf("日常"), store.names())
         assertEquals(daily, store.load("日常"))
         assertFalse(preferences.all.keys.any { it.startsWith("profile.骑行.") })
+    }
+
+    @Test
+    fun legacyAntProfileFallsBackToBleWithoutLosingSettings() {
+        val preferences = MemoryPreferences()
+        val store = TriggerProfileStore(preferences)
+        val original = sampleProfile()
+        store.save("旧方案", original)
+        preferences.edit().putString("profile.旧方案.transport", "ANT_PLUS").apply()
+        assertEquals(original, store.load("旧方案"))
+        store.save("旧方案", store.load("旧方案")!!)
+        assertEquals("BLE", preferences.getString("profile.旧方案.transport", null))
     }
 
     private fun sampleProfile() = TriggerProfile(

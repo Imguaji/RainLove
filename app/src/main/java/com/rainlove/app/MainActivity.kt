@@ -61,7 +61,6 @@ import com.rainlove.app.media.NeteaseMusic
 import com.rainlove.app.media.ExternalLink
 import com.rainlove.app.media.TriggerTarget
 import com.rainlove.app.profiles.TriggerProfileStore
-import com.rainlove.app.sensor.HeartRateTransport
 import com.rainlove.app.trigger.HeartRateTriggerEngine
 import com.rainlove.app.trigger.HeartRateMonitor
 import com.rainlove.app.trigger.TriggerProgress
@@ -279,56 +278,24 @@ private fun RainLoveScreen(vm: RainLoveViewModel, lifecycle: Lifecycle) {
                     valueRange = 40f..200f,
                 )
             } else {
-                Text("心率连接方式")
-                TriggerTargetOption(
-                    label = "Bluetooth LE",
-                    selected = state.heartRateTransport == HeartRateTransport.BLE,
-                    enabled = !state.monitoring,
-                    onClick = { vm.setHeartRateTransport(HeartRateTransport.BLE) },
-                )
-                TriggerTargetOption(
-                    label = "ANT+",
-                    selected = state.heartRateTransport == HeartRateTransport.ANT_PLUS,
-                    enabled = !state.monitoring,
-                    onClick = { vm.setHeartRateTransport(HeartRateTransport.ANT_PLUS) },
-                )
-                if (state.heartRateTransport == HeartRateTransport.BLE) {
-                    Text("心率设备：${state.selectedDeviceName ?: "自动选择"}")
-                    Button(onClick = {
-                        val permissions = missingBluetoothPermissions(context)
-                        if (permissions.isEmpty()) vm.scanForDevices()
-                        else {
-                            pendingBluetoothAction = BluetoothAction.SCAN
-                            permissionLauncher.launch(permissions.toTypedArray())
-                        }
-                    }, enabled = !state.monitoring) {
-                        Text(if (state.scanningDevices) "正在扫描…" else "扫描心率设备")
+                Text("心率连接方式：Bluetooth LE")
+                Text("心率设备：${state.selectedDeviceName ?: "自动选择"}")
+                Button(onClick = {
+                    val permissions = missingBluetoothPermissions(context)
+                    if (permissions.isEmpty()) vm.scanForDevices()
+                    else {
+                        pendingBluetoothAction = BluetoothAction.SCAN
+                        permissionLauncher.launch(permissions.toTypedArray())
                     }
-                    if (state.selectedDeviceAddress != null) {
-                        Button(onClick = { vm.selectDevice(null) }, enabled = !state.monitoring) { Text("改为自动选择") }
-                    }
-                    state.availableDevices.forEach { device ->
-                        Button(onClick = { vm.selectDevice(device) }, enabled = !state.monitoring) {
-                            Text("${device.name} · ${device.address}")
-                        }
-                    }
-                } else {
-                    val radioInstalled = isPackageInstalled(context, ANT_RADIO_SERVICE_PACKAGE)
-                    val pluginsInstalled = isPackageInstalled(context, ANT_PLUS_PLUGINS_PACKAGE)
-                    Text("ANT Radio Service：${if (radioInstalled) "已安装" else "未安装"}")
-                    Text("ANT+ Plugins Service：${if (pluginsInstalled) "已安装" else "未安装"}")
-                    Text("将自动连接第一个可用的 ANT+ 心率设备；手机需具备 ANT+ 硬件或兼容的 ANT USB 适配器。")
-                    if (!radioInstalled) {
-                        Button(
-                            onClick = { openStore(context, ANT_RADIO_SERVICE_PACKAGE) },
-                            enabled = !state.monitoring,
-                        ) { Text("安装 ANT Radio Service") }
-                    }
-                    if (!pluginsInstalled) {
-                        Button(
-                            onClick = { openStore(context, ANT_PLUS_PLUGINS_PACKAGE) },
-                            enabled = !state.monitoring,
-                        ) { Text("安装 ANT+ Plugins Service") }
+                }, enabled = !state.monitoring) {
+                    Text(if (state.scanningDevices) "正在扫描…" else "扫描心率设备")
+                }
+                if (state.selectedDeviceAddress != null) {
+                    Button(onClick = { vm.selectDevice(null) }, enabled = !state.monitoring) { Text("改为自动选择") }
+                }
+                state.availableDevices.forEach { device ->
+                    Button(onClick = { vm.selectDevice(device) }, enabled = !state.monitoring) {
+                        Text("${device.name} · ${device.address}")
                     }
                 }
                 Row(
@@ -518,7 +485,7 @@ private fun RainLoveScreen(vm: RainLoveViewModel, lifecycle: Lifecycle) {
                 )
             }
             Button(onClick = {
-                val permissions = missingMonitoringPermissions(context, state.heartRateTransport)
+                val permissions = missingMonitoringPermissions(context)
                 if (!state.demoMode && permissions.isNotEmpty()) {
                     pendingBluetoothAction = BluetoothAction.START
                     permissionLauncher.launch(permissions.toTypedArray())
@@ -648,40 +615,10 @@ private fun missingBluetoothPermissions(context: android.content.Context) = requ
     ContextCompat.checkSelfPermission(context, it) != PackageManager.PERMISSION_GRANTED
 }
 
-private fun missingMonitoringPermissions(
-    context: android.content.Context,
-    transport: HeartRateTransport,
-): List<String> {
-    val permissions = if (transport == HeartRateTransport.BLE) {
-        requiredBluetoothPermissions().toMutableList()
-    } else {
-        if (Build.VERSION.SDK_INT >= 31) {
-            mutableListOf(Manifest.permission.BLUETOOTH_CONNECT)
-        } else {
-            mutableListOf()
-        }
-    }
+private fun missingMonitoringPermissions(context: android.content.Context): List<String> {
+    val permissions = requiredBluetoothPermissions().toMutableList()
     if (Build.VERSION.SDK_INT >= 33) permissions += Manifest.permission.POST_NOTIFICATIONS
     return permissions.filter { ContextCompat.checkSelfPermission(context, it) != PackageManager.PERMISSION_GRANTED }
 }
-
-private fun isPackageInstalled(context: android.content.Context, packageName: String): Boolean =
-    runCatching { context.packageManager.getPackageInfo(packageName, 0) }.isSuccess
-
-private fun openStore(context: android.content.Context, packageName: String) {
-    val marketIntent = Intent(Intent.ACTION_VIEW, Uri.parse("market://details?id=$packageName"))
-        .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-    runCatching { context.startActivity(marketIntent) }.getOrElse {
-        context.startActivity(
-            Intent(
-                Intent.ACTION_VIEW,
-                Uri.parse("https://play.google.com/store/apps/details?id=$packageName"),
-            ).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-        )
-    }
-}
-
-private const val ANT_RADIO_SERVICE_PACKAGE = "com.dsi.ant.service.socket"
-private const val ANT_PLUS_PLUGINS_PACKAGE = "com.dsi.ant.plugins.antplus"
 
 private enum class BluetoothAction { NONE, SCAN, START }
